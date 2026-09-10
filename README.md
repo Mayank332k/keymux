@@ -1,12 +1,12 @@
 # keymux
 
-**Enterprise-grade API Key Multiplexer & Translation Proxy for LLM Providers**
+**Open-Source API Key Multiplexer & Translation Proxy for LLM Providers**
 
 Distribute requests across multiple API keys with intelligent Time-To-First-Token (TTFT) routing, zero-downtime failover, and resilient format translation. Compatible with OpenAI SDK, LangChain, Vercel AI SDK, and any OpenAI-compatible client.
 
 > ⚠️ **Single Instance Only** — This library manages keys in-memory. For multi-instance deployments, see [Production Deployment](#production-deployment) below.
 
-## Enterprise Features 🚀
+## Community Features 💫
 
 - ⚡ **Smart Routing & TTFT Tracking** — Supports multiple strategies including Smart TTFT Routing (finds fastest API key by tracking live "Time To First Token" latency), Weighted Least Utilization, and RoundRobin.
 - 🛡 **Zero-Downtime Failover** — Intercepts pre-response rate limits (429s) and 5xx errors using exponential backoff. It translates the model name to fit a fallback provider on the fly and retries automatically (note: it does not resume a stream that breaks midway).
@@ -27,7 +27,37 @@ npm run build
 npx tsc
 ```
 
-## Quick Start
+## ⚡ Quick Start: Using with Claude Code
+
+![Claude Code](https://img.shields.io/badge/Claude%20Code-Zero%20Downtime-D97757?style=for-the-badge&logo=anthropic&logoColor=white)
+
+Keymux acts as a robust local proxy to route Anthropic-style requests from Claude Code to OpenRouter, Gemini, Mistral, or Nvidia NIM seamlessly!
+
+### The "Auto-Setup" Prompt 🤖
+Don't want to configure it manually? Just copy-paste this prompt into Claude Code or any LLM, and it will set everything up for you:
+
+> "Hey! I want to use Keymux as my local proxy for Claude Code. Please write a bash script to start `npx keymux daemon --port 3002` in the background. Then, update my shell profile (like `.zshrc` or `.bashrc`) to add an alias for Claude Code that automatically exports `ANTHROPIC_API_KEY="dummy"` and `ANTHROPIC_BASE_URL="http://127.0.0.1:3002/v1"` right before running the `claude` command."
+
+### Manual Setup
+1. **Start the Keymux Daemon:**
+   ```bash
+   npx keymux daemon --port 3002
+   ```
+
+2. **Configure Claude Code:**
+   Tell Claude Code to use your local Keymux proxy as its API endpoint.
+   ```bash
+   export ANTHROPIC_API_KEY="dummy-key-not-needed"
+   export ANTHROPIC_BASE_URL="http://127.0.0.1:3002/v1"
+   
+   # Start Claude Code
+   claude
+   ```
+
+3. **Enjoy Zero-Downtime Coding:**
+   Keymux will automatically translate Claude's tool calls (file edits, bash commands) to standard formats, track your API usage, and magically failover if a provider rate-limits you!
+
+## Usage as a Library
 
 ### With Multi-Provider Support (Groq, Nvidia, Gemini, etc.)
 
