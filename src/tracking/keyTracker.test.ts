@@ -83,8 +83,11 @@ describe('KeyTracker', () => {
     it('should increment RPM and reset failures', () => {
       const state = tracker.getState('key-1')!;
       state.failures = 2;
+      const now = Date.now();
+      state.requestTimestamps = [now, now, now, now, now];
       state.rpm = 5;
 
+      tracker.recordAttempt('key-1');
       tracker.recordSuccess('key-1', 100);
 
       expect(state.rpm).toBe(6);
@@ -112,6 +115,7 @@ describe('KeyTracker', () => {
 
   describe('Failure Recording', () => {
     it('should increment failures and RPM', () => {
+      tracker.recordAttempt('key-1');
       tracker.recordFailure('key-1', true);
 
       const state = tracker.getState('key-1')!;
@@ -156,8 +160,11 @@ describe('KeyTracker', () => {
 
   describe('Statistics', () => {
     it('should return correct stats', () => {
+      tracker.recordAttempt('key-1');
       tracker.recordSuccess('key-1', 100);
+      tracker.recordAttempt('key-1');
       tracker.recordSuccess('key-1', 200);
+      tracker.recordAttempt('key-2');
       tracker.recordFailure('key-2', true);
 
       const stats = tracker.getStats();
@@ -174,8 +181,11 @@ describe('KeyTracker', () => {
     });
 
     it('should return overall stats', () => {
+      tracker.recordAttempt('key-1');
       tracker.recordSuccess('key-1');
+      tracker.recordAttempt('key-1');
       tracker.recordSuccess('key-1');
+      tracker.recordAttempt('key-2');
       tracker.recordSuccess('key-2');
 
       const overall = tracker.getOverallStats();
@@ -189,22 +199,28 @@ describe('KeyTracker', () => {
   describe('Sliding Window Cleanup', () => {
     it('should reset RPM for keys outside window', () => {
       const state = tracker.getState('key-1')!;
-      state.rpm = 10;
-      state.lastUsed = Date.now() - 70_000;
+      const oldTime = Date.now() - 70_000;
+      state.requestTimestamps = [oldTime, oldTime];
+      state.rpm = 2;
+      state.lastUsed = oldTime;
 
       (tracker as any).cleanupExpiredWindows();
 
       expect(state.rpm).toBe(0);
+      expect(state.requestTimestamps.length).toBe(0);
     });
 
     it('should not reset RPM for keys within window', () => {
       const state = tracker.getState('key-1')!;
-      state.rpm = 10;
-      state.lastUsed = Date.now() - 10_000;
+      const recentTime = Date.now() - 10_000;
+      state.requestTimestamps = [recentTime, recentTime];
+      state.rpm = 2;
+      state.lastUsed = recentTime;
 
       (tracker as any).cleanupExpiredWindows();
 
-      expect(state.rpm).toBe(10);
+      expect(state.rpm).toBe(2);
+      expect(state.requestTimestamps.length).toBe(2);
     });
   });
 

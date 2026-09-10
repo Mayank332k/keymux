@@ -26,7 +26,7 @@ async function runBootAnimation() {
   }
   
   console.log(chalk.gray('\n ⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤\n'));
-  console.log(chalk.bold(' [ NETWORK PING ] '));
+  console.log(chalk.bold(' [ DECORATIVE BOOT SEQUENCE - NOT LIVE DATA ] '));
   
   const pings = [
     { name: 'groq', ttft: '184ms' },
@@ -85,7 +85,12 @@ async function main() {
     await runBootAnimation();
     await startDaemon(port);
   } else if (command === 'stop') {
-    await stopDaemon(3002);
+    let port = 3002;
+    const portIndex = args.indexOf('--port');
+    if (portIndex !== -1 && args.length > portIndex + 1) {
+      port = parseInt(args[portIndex + 1] ?? '3002', 10);
+    }
+    await stopDaemon(port);
   } else {
     console.log(`Unknown command: ${command}`);
     console.log(helpText);

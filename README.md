@@ -4,15 +4,15 @@
 
 Distribute requests across multiple API keys with intelligent Time-To-First-Token (TTFT) routing, zero-downtime failover, and resilient format translation. Compatible with OpenAI SDK, LangChain, Vercel AI SDK, and any OpenAI-compatible client.
 
-> ⚠️ **Single Instance Only** — This library manages keys in-memory. For production with multiple server instances, use Redis-backed state sharing (see [Production Deployment](#production-deployment) below).
+> ⚠️ **Single Instance Only** — This library manages keys in-memory. For multi-instance deployments, see [Production Deployment](#production-deployment) below.
 
 ## Enterprise Features 🚀
 
-- ⚡ **Smart TTFT Routing** — Beyond basic round-robin! Dynamically finds the fastest API key by tracking live "Time To First Token" latency, groups keys into a +100ms "Tolerance Band", and picks the least utilized key from the fastest pool.
-- 🛡 **Zero-Downtime Failover** — Dynamically intercepts mid-request rate limits (429s). It translates the model name to fit a fallback provider on the fly and retries automatically without throwing errors to the client.
-- 🔄 **Extensive Provider Support** — Native integration with **Groq (LPU)**, **Gemini**, **Mistral**, **OpenRouter**, **Nvidia**, and **OpenAI**.
-- 🦾 **Resilient Payload Translation** — The translation layer safely intercepts binary and Base64 files (such as PDFs sent by Claude Code), preventing JSON parsing crashes and ensuring stable long-running agent workflows.
-- 🖥️ **Hacker-Friendly Dashboard** — The CLI features a slick Cyberpunk ASCII logo, a Grouped Tree View for easy monitoring, and tracks live TTFT latency across all your providers.
+- ⚡ **Smart Routing & TTFT Tracking** — Supports multiple strategies including Smart TTFT Routing (finds fastest API key by tracking live "Time To First Token" latency), Weighted Least Utilization, and RoundRobin.
+- 🛡 **Zero-Downtime Failover** — Intercepts pre-response rate limits (429s) and 5xx errors using exponential backoff. It translates the model name to fit a fallback provider on the fly and retries automatically (note: it does not resume a stream that breaks midway).
+- 🔄 **Full Translation Layer** — Maps Anthropic Claude prompts and tool calls to OpenAI/OpenRouter format for models like Groq, Nvidia, Gemini, and Mistral. Safely intercepts binary/Base64 files preventing JSON parsing crashes.
+- 🔒 **Privacy-Safe Local Logging** — Keeps your data secure by ensuring all prompts and sensitive payloads are redacted in local logs.
+- 🖥️ **Interactive CLI Dashboard** — A hacker-friendly interface featuring a cyberpunk ASCII logo, grouped tree view for easy monitoring, and live tracking of utilization and TTFT latencies.
 
 ## Installation
 
@@ -97,7 +97,7 @@ const router = new KeyRouter({
   enableAutoTranslation: true 
 });
 
-// Automatically retries on rate limit/server errors across providers
+// Automatically retries on pre-response rate limit/server errors across providers using exponential backoff
 const apiKey = createFailoverKeyGetter(router, 3);
 ```
 
@@ -190,44 +190,15 @@ Keymux intercepts formats like Base64 PDFs from tools like Claude Code to preven
 2. **Tracker filters** healthy keys (circuit closed + under RPM limit)
 3. **Strategy identifies** the fastest keys (TTFT) and builds a `+100ms` tolerance band.
 4. **Tie-breaker** picks the least utilized key in that fast band.
-5. **Failover** dynamically translates payloads across providers if a 429 is hit mid-stream.
+5. **Failover** dynamically translates payloads across providers if a 429 or 5xx error is hit pre-response.
 
 ## Production Deployment
 
 **For single-instance servers** (e.g., Next.js, single Express server, cron jobs): this library works as-is!
 
-**For multi-instance production deployments** (multiple containers/pods behind a load balancer): each instance maintains its own in-memory state, which causes load distribution to become inconsistent. To fix this, you have two options:
+**For multi-instance production deployments** (multiple containers/pods behind a load balancer): each instance maintains its own in-memory state, which causes load distribution to become inconsistent.
 
-### Option 1: Redis-Backed State (Recommended)
-
-Replace the in-memory `KeyTracker` with a Redis-backed implementation. This allows all instances to share the same key state:
-
-```typescript
-import { createRedisKeyTracker } from 'keymux/adapters/redis';
-
-// Create shared tracker across all instances
-const tracker = createRedisKeyTracker({
-  redis: { host: 'localhost', port: 6379 },
-  keyPrefix: 'keymux:',
-  defaultRpmLimit: 40,
-  windowMs: 60_000
-});
-
-const router = new KeyRouter({
-  keys: [...],
-  tracker  // Pass your Redis tracker here
-});
-```
-
-All instances will now share:
-- Real-time RPM counts
-- Circuit breaker states
-- Failure tracking
-- TTFT aggregates
-
-### Option 2: Dedicated Key Management Service
-
-Run keymux as a separate microservice that acts as a central key manager:
+To fix this, you should run keymux as a separate microservice that acts as a central key manager:
 
 ```
 ┌─────────────┐      ┌──────────────────┐      ┌─────────────┐

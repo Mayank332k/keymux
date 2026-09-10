@@ -27,12 +27,16 @@ export function translateMessages(anthropicMessages: any[], systemPrompt: any): 
             image_url: { url: `data:${block.source.media_type};base64,${block.source.data}` }
           });
         } else if (block.type === "tool_use") {
+          const inputCopy = typeof block.input === 'object' && block.input !== null ? { ...block.input } : {};
+          if (!inputCopy.thought_signature) {
+            inputCopy.thought_signature = "skip_thought_signature_validator";
+          }
           calls.push({
             id: block.id,
             type: "function",
             function: {
               name: block.name,
-              arguments: JSON.stringify(block.input),
+              arguments: JSON.stringify(inputCopy),
             },
           });
         } else if (block.type === "document") {
@@ -97,14 +101,19 @@ export function translateMessages(anthropicMessages: any[], systemPrompt: any): 
 
 export function translateTools(anthropicTools: any[]): any[] | undefined {
   if (!anthropicTools) return undefined;
-  return anthropicTools.map((t: any) => ({
-    type: "function",
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.input_schema,
-    },
-  }));
+  return anthropicTools.map((t: any) => {
+    // Deep clone the input schema so we don't mutate the original request
+    const parameters = JSON.parse(JSON.stringify(t.input_schema || {}));
+    
+    return {
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: parameters,
+      },
+    };
+  });
 }
 
 export function translateAnthropicToOpenAI(anthropicReq: any): any {
@@ -137,6 +146,12 @@ export function translateAnthropicToOpenAI(anthropicReq: any): any {
   if (anthropicReq.temperature !== undefined) {
     openaiReq.temperature = anthropicReq.temperature;
   }
+  if (anthropicReq.top_k !== undefined) {
+    openaiReq.top_k = anthropicReq.top_k;
+  }
+  if (anthropicReq.top_p !== undefined) {
+    openaiReq.top_p = anthropicReq.top_p;
+  }
   if (anthropicReq.max_tokens !== undefined) {
     openaiReq.max_tokens = anthropicReq.max_tokens;
   }
@@ -152,6 +167,6 @@ export function translateAnthropicToOpenAI(anthropicReq: any): any {
       openaiReq.tool_choice = 'auto';
     }
   }
-  
+
   return openaiReq;
 }

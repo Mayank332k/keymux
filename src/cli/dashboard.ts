@@ -13,10 +13,14 @@ let flashMessage = '';
 function readConfig() {
   try {
     if (fs.existsSync(configPath)) {
-      return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (parsed && typeof parsed === 'object') {
+        if (!parsed.keys) parsed.keys = { openrouter: [], nvidia: [], mistral: [], gemini: [], groq: [] };
+        return parsed;
+      }
     }
   } catch (e) {}
-  return { defaultProvider: null, defaultModel: '', keys: { openrouter: [], nvidia: [] } };
+  return { defaultProvider: null, defaultModel: '', keys: { openrouter: [], nvidia: [], mistral: [], gemini: [], groq: [] } };
 }
 
 function saveConfig(cfg: any) {
@@ -25,11 +29,13 @@ function saveConfig(cfg: any) {
   } catch (e) {}
 }
 
+const proxyPort = process.argv.includes('--port') ? parseInt(process.argv[process.argv.indexOf('--port') + 1] || '3002', 10) : 3002;
+
 async function triggerReload() {
   return new Promise((resolve) => {
     const req = http.request({
       hostname: 'localhost',
-      port: 3002,
+      port: proxyPort,
       path: '/v1/keymux/reload',
       method: 'POST'
     }, (res) => { resolve(true); });
@@ -42,7 +48,10 @@ function readUsageData() {
   const usagePath = path.join(os.homedir(), '.keymux', 'usage.json');
   try {
     if (fs.existsSync(usagePath)) {
-      return JSON.parse(fs.readFileSync(usagePath, 'utf8'));
+      const parsed = JSON.parse(fs.readFileSync(usagePath, 'utf8'));
+      if (parsed && typeof parsed === 'object') {
+        return parsed;
+      }
     }
   } catch (e) {}
   return { totalInputTokens: 0, totalOutputTokens: 0, totalCacheTokens: 0, providerUsage: {}, daily: {}, sessions: 0 };
@@ -60,93 +69,16 @@ let settingsSelectionIdx = 0;
 let expandedProviders: string[] = [];
 let currentTreeItems: any[] = [];
 let usageViewMode: 'today' | 'session' = 'today';
-const SETTINGS_OPTS = ['Routing Mode', 'Default Model', 'Add OpenRouter Key', 'Add Nvidia Key', 'Save & Apply', 'Discard Changes'];
+let settingsView: 'main' | 'models' | 'keys' = 'main';
 
 let isInputMode = false;
-let isDiagnosticsMode = false;
-let diagnosticsComplete = false;
 let inputTarget = '';
 let inputBuffer = '';
 let promptStr = '';
 let isListening = false;
 
-let isSelectingModel = false;
-let modelSelectionIdx = 0;
 
-const MODELS = [
-  {
-    id: 'minimax/minimax-m3',
-    displayName: 'MiniMax M3',
-    context: '1M context',
-    provider: 'openrouter',
-    description: 'Latest MiniMax · High reasoning capability · Fast speed'
-  },
-  {
-    id: 'minimax/minimax-m2.7',
-    displayName: 'MiniMax M2.7',
-    context: '1M context',
-    provider: 'openrouter',
-    description: 'MiniMax M2.7 · Great for routine tasks · Blazing fast'
-  },
-  {
-    id: 'qwen/qwen3.8-27b',
-    displayName: 'Qwen 3.8 27B',
-    context: '32K context',
-    provider: 'openrouter',
-    description: 'Qwen 3.8 27B via OpenRouter'
-  },
-  {
-    id: 'openai/gpt-oss-120b',
-    displayName: 'GPT OSS 120B',
-    context: '128K context',
-    provider: 'openrouter',
-    description: 'GPT OSS 120B via OpenRouter'
-  },
-  {
-    id: 'nvidia/nemotron-3-super-120b-a12b',
-    displayName: 'Nemotron Super',
-    context: '256K context',
-    provider: 'nvidia',
-    description: 'Nemotron 120B · Solid instruction following · Moderate speed'
-  },
-  {
-    id: 'nvidia/nemotron-3-ultra-550b-a55b',
-    displayName: 'Nemotron Ultra',
-    context: '1M context',
-    provider: 'nvidia',
-    description: 'Nemotron 550B · Top-tier reasoning · Massive context window'
-  },
-  {
-    id: 'codestral-latest',
-    displayName: 'Codestral',
-    context: '256K context',
-    provider: 'mistral',
-    description: 'Codestral · Specialized for Code & Agents · Native Mistral API'
-  },
-  {
-    id: 'gemini-1.5-flash',
-    displayName: 'Gemini 1.5 Flash',
-    context: '2M context',
-    provider: 'gemini',
-    description: 'Gemini 1.5 Flash · Native Google API'
-  },
-  {
-    id: 'llama-3.1-70b-versatile',
-    displayName: 'Llama 3.1 70B',
-    context: '128K context',
-    provider: 'groq',
-    description: 'Llama 3.1 70B · Ultra fast speed'
-  }
-];
 
-function getAvailableModels() {
-  if (draftConfig.defaultProvider === 'openrouter') return MODELS.filter(m => m.provider === 'openrouter');
-  if (draftConfig.defaultProvider === 'nvidia') return MODELS.filter(m => m.provider === 'nvidia');
-  if (draftConfig.defaultProvider === 'mistral') return MODELS.filter(m => m.provider === 'mistral');
-  if (draftConfig.defaultProvider === 'gemini') return MODELS.filter(m => m.provider === 'gemini');
-  if (draftConfig.defaultProvider === 'groq') return MODELS.filter(m => m.provider === 'groq');
-  return MODELS;
-}
 
 
 const orange = chalk.hex('#e27d60');
@@ -171,27 +103,27 @@ async function renderStats() {
   console.log(whiteHighlight(' Overview ') + '  Models');
   console.log(chalk.gray.italic('  (Showing all-time cumulative history and lifetime session metrics)'));
   const data = readUsageData();
-  
+
   let favProvider = 'None';
   let maxUsage = 0;
   for (const [prov, count] of Object.entries(data.providerUsage || {})) {
     if ((count as number) > maxUsage) { maxUsage = count as number; favProvider = prov; }
   }
-  
+
   const totalTokens = (data.totalInputTokens || 0) + (data.totalOutputTokens || 0);
   const formattedTotal = formatTokens(totalTokens);
-  
+
   const inTokensStr = formatTokens(data.totalInputTokens || 0);
   const outTokensStr = formatTokens(data.totalOutputTokens || 0);
   const cacheTokensStr = formatTokens(data.totalCacheTokens || 0);
-  
+
   const sessions = data.sessions || 1;
   const dailyDates = Object.keys(data.daily || {}).sort();
   const activeDays = dailyDates.length;
 
   let mostActiveDay = 'None';
   let maxDailyTokens = 0;
-  
+
   for (const date of dailyDates) {
     const dayData = (data.daily as any)[date];
     const dayTokens = (dayData.inputTokens || 0) + (dayData.outputTokens || 0);
@@ -210,7 +142,7 @@ async function renderStats() {
       const dateStr = checkDate.toISOString().split('T')[0] as string;
       if (data.daily && (data.daily as any)[dateStr]) {
         currentStreak++;
-      } else if (i > 0) { 
+      } else if (i > 0) {
         break;
       }
     }
@@ -221,13 +153,13 @@ async function renderStats() {
   const grid: string[][] = Array.from({length: 7}, () => Array(52).fill(' '));
   const today = new Date();
   const todayDayOfWeek = today.getDay();
-  
+
   for (let col = 0; col < 52; col++) {
     for (let row = 0; row < 7; row++) {
       const weeksAgo = 51 - col;
       const daysAgo = (weeksAgo * 7) + (todayDayOfWeek - row);
       if (daysAgo < 0 || daysAgo > 364) {
-        if(grid[row] && typeof col === "number") grid[row]![col] = ' '; 
+        if(grid[row] && typeof col === "number") grid[row]![col] = ' ';
       } else {
         const d = new Date();
         d.setDate(today.getDate() - daysAgo);
@@ -246,7 +178,7 @@ async function renderStats() {
       }
     }
   }
-  
+
   console.log('    Sep Oct Nov Dec Jan Feb Mar Apr May Jun Jul Aug');
   const rowLabels = ['   ', 'Mon', '   ', 'Wed', '   ', 'Fri', '   '];
   for (let row = 0; row < 7; row++) {
@@ -257,9 +189,9 @@ async function renderStats() {
     console.log();
   }
   console.log('    Less ' + blocks.join(' ') + ' More');
-  
+
   console.log(orange('All time') + gray(' · Last 7 days · Last 30 days') + '');
-  
+
   console.log(`Favorite provider: ${orange(favProvider.padEnd(16))}Total tokens: ${orange(formattedTotal)}`);
   console.log(`Sessions: ${orange(sessions.toString().padEnd(25))}Active days: ${orange(activeDays.toString())}`);
   console.log(`Most active day: ${orange(mostActiveDay.padEnd(17))}Current streak: ${orange(currentStreak + ' days')}`);
@@ -267,119 +199,119 @@ async function renderStats() {
   console.log(gray(`Input ${inTokensStr} · Output ${outTokensStr} · Cache read ${cacheTokensStr}`));
   console.log();
   console.log();
-  console.log(gray('↓ stats · r to cycle dates'));
+  console.log(gray('↓ stats · r to refresh'));
 }
 
 async function renderStatus() {
-  console.log(orange(' ⚡ ACTIVE CONNECTIONS'));
-  console.log(chalk.gray.italic('    (Real-time live health, RPM limits, and dynamic cooldown timers)'));
+  console.log('\n  STATUS');
 
-  let lastRouteStr = '';
+  let activeMode = 'auto';
+  let activeModel = 'none';
+  let currentProvider = 'auto';
+
+  try {
+    const amRes = await fetch(`http://localhost:${proxyPort}/v1/keymux/activeModel`);
+    if (amRes.ok) {
+      const am: any = await amRes.json();
+      activeMode = am.mode === 'STRICT' ? 'strict' : 'auto';
+      activeModel = am.model === 'auto' ? 'auto (best available)' : am.model;
+      currentProvider = am.provider === 'auto' ? 'auto' : am.provider.toLowerCase();
+    }
+  } catch(e) {}
+
   let activeKey = '';
   try {
-    const lrRes = await fetch('http://localhost:3002/v1/keymux/lastRoute');
+    const lrRes = await fetch(`http://localhost:${proxyPort}/v1/keymux/lastRoute`);
     if (lrRes.ok) {
       const lr: any = await lrRes.json();
       if (lr && lr.provider) {
         activeKey = lr.key || '';
-        let pName = lr.provider.charAt(0).toUpperCase() + lr.provider.slice(1);
-        let pColor = lr.provider.toLowerCase() === 'openrouter' ? chalk.cyan : (lr.provider.toLowerCase() === 'mistral' ? chalk.magenta : (lr.provider.toLowerCase() === 'gemini' ? chalk.blue : (lr.provider.toLowerCase() === 'groq' ? chalk.yellow : chalk.green)));
-        let kStr = lr.key || 'unk';
-        if (kStr.length > 10) {
-          kStr = kStr.substring(0, 4) + '...' + kStr.slice(-4);
-        }
-        lastRouteStr = chalk.yellow('⚡ Last Route: ') + pColor(`[${pName}]`) + ' ' + chalk.white(lr.model) + chalk.gray(` (Key: ${kStr})`) + '';
       }
     }
   } catch(e) {}
 
-  if (lastRouteStr) console.log(lastRouteStr);
+  const leftColWidth = 35;
+  const printRow = (label: string, value: string) => {
+    console.log(`  ${chalk.white(label.padEnd(leftColWidth))} ${chalk.white(value)}`);
+  };
+
+  let maskedActiveKey = 'none';
+  if (activeKey) {
+    maskedActiveKey = activeKey.length > 10 ? `${activeKey.substring(0, 4)}...${activeKey.slice(-4)}` : activeKey;
+  }
+
+  printRow('Active mode', activeMode);
+  printRow('Active model', activeModel);
+  printRow('Current provider', currentProvider);
+  printRow('Last used key', maskedActiveKey);
+
+  console.log('\n  CONNECTIONS (Real-time health, RPM limits, latency)');
+  console.log('  ' + '─'.repeat(60));
+
   try {
-    const res = await fetch('http://localhost:3002/v1/keymux/stats');
+    const res = await fetch(`http://localhost:${proxyPort}/v1/keymux/stats`);
     if (res.ok) {
       const stats: any[] = await res.json() as any[];
-      const h = chalk.bold.cyan;
-      const b = chalk.dim;
-      
-      console.log(h(' NODE'.padEnd(14)) + h('KEY'.padEnd(13)) + h('HEALTH'.padEnd(19)) + h('LOAD (RPM)'.padEnd(16)) + h('TTFT'));
-      console.log(b(' ───────────────────────────────────────────────────────────────────────'));
-      
+
       if (stats.length === 0) {
-        console.log(chalk.gray('  No active keys found.'));
+        console.log(chalk.dim('  No active keys found.'));
       }
-      
+
       for (const ep of stats) {
         let providerName = ep.id?.split('-')[0] || 'unk';
-        providerName = providerName.charAt(0).toUpperCase() + providerName.slice(1);
-        let pColor = providerName.toLowerCase() === 'openrouter' ? chalk.cyan : (providerName.toLowerCase() === 'mistral' ? chalk.magenta : (providerName.toLowerCase() === 'gemini' ? chalk.blue : (providerName.toLowerCase() === 'groq' ? chalk.yellow : chalk.green)));
-        
+        if (providerName.toLowerCase() === 'openrouter') providerName = 'OpenRouter';
+        else if (providerName.toLowerCase() === 'nvidia') providerName = 'Nvidia NIM';
+        else if (providerName.toLowerCase() === 'mistral') providerName = 'Mistral AI';
+        else if (providerName.toLowerCase() === 'gemini') providerName = 'Google Gemini';
+        else if (providerName.toLowerCase() === 'groq') providerName = 'Groq';
+        else providerName = providerName.charAt(0).toUpperCase() + providerName.slice(1);
+
         let kStr = ep.key || 'unk';
         if (kStr.length > 10) {
           kStr = kStr.substring(0, 4) + '...' + kStr.slice(-4);
         }
-        
+
         const isH = ep.isHealthy;
         const cooldownS = ep.cooldownRemainingMs ? Math.ceil(ep.cooldownRemainingMs / 1000) : 0;
-        
+
         let healthStr = '';
-        let dot = '';
-        let pStr = '';
         if (!isH && (ep.circuitState === 'open' || cooldownS > 0)) {
-           healthStr = chalk.red(`[ BLOCKED - ${cooldownS}s ]`.padEnd(19));
-           dot = chalk.red('○');
-           pStr = chalk.red(providerName.padEnd(11));
+           healthStr = chalk.red(`BLOCKED   ${cooldownS}s cdn`.padEnd(19));
         } else if (!isH) {
-           healthStr = chalk.red('[ BLOCKED ]'.padEnd(19));
-           dot = chalk.red('○');
-           pStr = chalk.red(providerName.padEnd(11));
+           healthStr = chalk.red('BLOCKED            '.padEnd(19));
         } else {
-           healthStr = chalk.green('[ ACTIVE ]'.padEnd(19));
-           dot = pColor('●');
-           pStr = pColor(providerName.padEnd(11));
+           healthStr = chalk.green('ACTIVE             '.padEnd(19));
         }
-        
+
         const rpm = ep.rpm || 0;
         const lim = ep.rpmLimit;
-        let rStr = '';
-        if (lim && lim > 0) {
-          const blocks = 10;
-          const filled = Math.min(blocks, Math.floor((rpm / lim) * blocks));
-          rStr = `[${'█'.repeat(filled)}${'░'.repeat(blocks - filled)}]`;
-        } else {
-          rStr = `[${rpm}/-]`;
-        }
+        let rStr = lim && lim > 0 ? `${rpm} rpm` : `${rpm} rpm`;
         rStr = rStr.padEnd(16);
-        
+
         const lat = ep.latency || ep.avgLatencyMs || 0;
-        let lStr = (!isH && (ep.circuitState === 'open' || cooldownS > 0)) ? '---' : 
-                   (lat >= 60000 ? `${(lat / 60000).toFixed(1)}m` : 
+        let lStr = (!isH && (ep.circuitState === 'open' || cooldownS > 0)) ? '---' :
+                   (lat >= 60000 ? `${(lat / 60000).toFixed(1)}m` :
                    (lat >= 1000 ? `${(lat / 1000).toFixed(1)}s` : `${lat}ms`));
 
         if (lStr === '---') {
           lStr = chalk.gray('---');
-        } else if (lat < 2000) {
-          lStr = chalk.green(lStr);
-        } else if (lat >= 2000 && lat < 10000) {
-          lStr = chalk.rgb(19, 157, 155)(lStr);
         } else {
-          lStr = chalk.red(lStr);
+          lStr = chalk.white(lStr);
         }
-        
-        const activeIndicator = (activeKey && ep.key && activeKey.endsWith(ep.key.slice(-4))) ? chalk.bold.cyan('   ◀ ACTIVE') : '';
-        console.log(` ${dot} ${pStr}${kStr.padEnd(13)}${healthStr}${rStr}${lStr}${activeIndicator}`);
+
+        console.log(`  ${chalk.white(providerName.padEnd(15))}${chalk.white(kStr.padEnd(16))}${healthStr}${chalk.white(rStr)}${lStr}`);
       }
     } else {
-      console.log(chalk.yellow('  Proxy returned an error.'));
+      console.log(chalk.dim('  Proxy returned an error.'));
     }
   } catch(e) {
-    console.log(chalk.red('  Proxy offline or unreachable.'));
+    console.log(chalk.dim('  Proxy offline or unreachable.'));
   }
 }
 
 function renderSettings() {
   const isUnsaved = JSON.stringify(draftConfig) !== JSON.stringify(config);
   const unsavedTag = isUnsaved ? chalk.yellow(' (Unsaved Changes - Press S to Save)') : '';
-  console.log(chalk.bold.cyan('  ⚙  PREFERENCES') + unsavedTag + '');
 
   if (flashMessage) {
     console.log(chalk.green(`  ✔ ${flashMessage}`));
@@ -389,105 +321,110 @@ function renderSettings() {
   currentTreeItems = [];
   let index = 0;
 
-  console.log(chalk.bold.white('\n  ACTIVE MODEL ROUTING (Strict Mode - No Failover)'));
-  console.log(chalk.dim('  ─────────────────────────────────────────────────────────────────'));
-  const modelList = [
-    { type: 'provider', label: 'Groq' },
-    { type: 'model', provider: 'groq', id: 'openai/gpt-oss-120b', label: 'openai/gpt-oss-120b', tag: '[ Strong reasoning, coding, tool use ]' },
-    { type: 'model', provider: 'groq', id: 'qwen/qwen3.8-27b', label: 'qwen/qwen3.8-27b', tag: '[ Coding + reasoning ]' },
-    { type: 'model', provider: 'groq', id: 'groq/compound', label: 'groq/compound', tag: '[ Agent workflows, web search, code ex. ]' },
-    { type: 'provider', label: 'Nvidia NIM' },
-    { type: 'model', provider: 'nvidia', id: 'nvidia/nemotron-3-super-120b-a12b', label: 'nvidia/nemotron-3-super-120b-a12b', tag: '[ Elite Reasoning • 120B ]' },
-    { type: 'provider', label: 'Google Gemini' },
-    { type: 'model', provider: 'gemini', id: 'gemini-3.5-flash-lite', label: 'gemini-3.5-flash-lite', tag: '[ Ultra Low Cost • Fast ]' },
-    { type: 'provider', label: 'Mistral' },
-    { type: 'model', provider: 'mistral', id: 'devstral-latest', label: 'devstral-latest', tag: '[ Agentic software engineering ]' },
-    { type: 'model', provider: 'mistral', id: 'codestral-latest', label: 'codestral-latest', tag: '[ Code generation/completion ]' },
+  const leftColWidth = 35;
+  const renderRow = (label: string, value: string, isSelected: boolean) => {
+    const bg = isSelected ? chalk.bgHex('#333333').white : chalk.white;
+    const padding = Math.max(0, leftColWidth - label.length);
+    console.log(bg(`  ${label}${' '.repeat(padding)} ${value}`.padEnd(80)));
+  };
+
+  if (settingsView === 'main') {
+    console.log('\n  SETTINGS' + unsavedTag);
+    console.log('  ' + '─'.repeat(60));
+
+    currentTreeItems.push({ type: 'main_mode', index: index++ });
+    const isAuto = !draftConfig.strictMode;
+    renderRow('Routing mode', isAuto ? 'auto' : 'strict', (index - 1) === settingsSelectionIdx);
+
+    currentTreeItems.push({ type: 'main_model', index: index++ });
+    renderRow('Active model', isAuto ? chalk.gray('auto') : (draftConfig.defaultModel || 'none'), (index - 1) === settingsSelectionIdx);
+
+    currentTreeItems.push({ type: 'main_keys', index: index++ });
+    const totalKeys = Object.values(draftConfig.keys || {}).reduce((acc: number, arr: any) => acc + arr.length, 0);
+    renderRow('API keys', `${totalKeys} active keys`, (index - 1) === settingsSelectionIdx);
+
+    console.log('\n\n  ' + chalk.gray('Enter to toggle/select · S to save · X to discard'));
+
+  } else if (settingsView === 'models') {
+    console.log('\n  SELECT ACTIVE MODEL');
+    console.log('  ' + '─'.repeat(110));
+
+    const modelList = [
+      { provider: 'openrouter', id: 'nex-agi/nex-n2.5-pro:free', capa: 'Vision • Free tier • Agentic QA & browser testing' },
+      { provider: 'groq', id: 'qwen/qwen3.8-27b', capa: 'Vision tower • Ultra fast LPU • Native reasoning tags' },
+      { provider: 'groq', id: 'llama-3.1-70b-versatile', capa: 'Legacy 70B • Fast general purpose tool execution' },
+      { provider: 'groq', id: 'groq/compound', capa: 'Multi-tool agent • Integrated web search & code execution' },
+      { provider: 'nvidia', id: 'nvidia/nemotron-3-super-120b-a12b', capa: '120B MoE • High volume agentic reasoning traces' },
+      { provider: 'nvidia', id: 'nvidia/nemotron-3-ultra-550b-a55b', capa: '550B MoE • Massive enterprise IT & logic solver' },
+      { provider: 'nvidia', id: 'deepseek-ai/deepseek-v4-pro-0813', capa: '1.6T MoE • Top #1 coding & deep reasoning king' },
+      { provider: 'gemini', id: 'gemini-3.5-flash-lite', capa: 'Multimodal • 1M context • Low cost document parser' },
+      { provider: 'mistral', id: 'devstral-latest', capa: 'Discontinued • Software engineering agentic workflow specialist' },
+      { provider: 'mistral', id: 'codestral-latest', capa: '256K context • Pure fill-in-the-middle code completion' },
     ];
 
-  for (const m of modelList) {
-    if (m.type === 'provider') {
-      console.log(`\n   - ${chalk.white(m.label)}`);
-    } else {
-      currentTreeItems.push({ ...m, index: index++ });
+    for (const m of modelList) {
+      currentTreeItems.push({ type: 'model', provider: m.provider, id: m.id, index: index++ });
       const isSelected = (index - 1) === settingsSelectionIdx;
       const isSaved = draftConfig.defaultModel === m.id;
-      
-      const hover = isSelected ? chalk.cyan('❯') : ' ';
-      const saved = isSaved ? chalk.green('▶') : ' ';
-      
-      const prefix = `    ${hover} ${saved} `;
-      const modelStr = m.id!.padEnd(33);
-      const tagStr = chalk.dim(m.tag);
-      
+
+      const modelStr = m.id.padEnd(leftColWidth);
+      const provStr = m.provider.padEnd(14);
+
+      let line = '';
       if (isSelected) {
-         console.log(chalk.cyan(`${prefix}${modelStr} ${m.tag}`));
-      } else if (isSaved) {
-         console.log(`${prefix}${chalk.green(modelStr)} ${tagStr}`);
+        line = chalk.bgHex('#333333').white(`  ${modelStr} `) + chalk.bgHex('#333333').gray(`${provStr} ${m.capa}`);
+        console.log(chalk.bgHex('#333333')(line.padEnd(120)));
       } else {
-         console.log(`${prefix}${chalk.white(modelStr)} ${tagStr}`);
+        const idCol = isSaved ? chalk.blue(`  ${modelStr} `) : chalk.bold.white(`  ${modelStr} `);
+        const metaCol = chalk.gray(`${provStr} ${m.capa}`);
+        console.log(`${idCol}${metaCol}`);
       }
     }
-  }
 
-  console.log(chalk.bold.white('\n\n  API SECRETS & KEYS'));
-  console.log(chalk.dim('  ─────────────────────────────────────────────────────────────────'));
+    console.log('\n\n  ' + chalk.gray('Enter to select · Esc to return'));
 
-  const providers = ['nvidia', 'mistral', 'gemini', 'groq'];
-  const capitalize = (s: string) => {
-    if (s === 'openrouter') return 'OpenRouter';
-    if (s === 'nvidia') return 'Nvidia NIM';
-    if (s === 'mistral') return 'Mistral AI';
-    if (s === 'gemini') return 'Google Gemini';
-    if (s === 'groq') return 'Groq';
-    return s;
-  };
-  const maskKey = (k: string) => k.length > 8 ? k.substring(0, 4) + '...' + k.slice(-4) : '***';
+  } else if (settingsView === 'keys') {
+    console.log('\n  API SECRETS');
+    console.log('  ' + '─'.repeat(60));
 
-  for (const p of providers) {
-    const keys = draftConfig.keys?.[p] || [];
-    currentTreeItems.push({ type: 'secret_provider', provider: p, label: capitalize(p), value: keys.length + ' Active Keys', index: index++ });
-    const isSelected = (index - 1) === settingsSelectionIdx;
-    const hover = isSelected ? chalk.cyan('❯') : ' ';
-    const prefix = `    ${hover} `;
-    
-    if (isSelected) {
-      console.log(chalk.cyan(`${prefix}${capitalize(p).padEnd(20)} ${keys.length} Active Keys`));
-    } else {
-      console.log(`${prefix}${chalk.white(capitalize(p).padEnd(20))} ${chalk.dim(keys.length + ' Active Keys')}`);
-    }
+    const providers = ['openrouter', 'nvidia', 'mistral', 'gemini', 'groq'];
+    const capitalize = (s: string) => {
+      if (s === 'openrouter') return 'OpenRouter';
+      if (s === 'nvidia') return 'Nvidia NIM';
+      if (s === 'mistral') return 'Mistral AI';
+      if (s === 'gemini') return 'Google Gemini';
+      if (s === 'groq') return 'Groq';
+      return s;
+    };
+    const maskKey = (k: string) => k.length > 8 ? k.substring(0, 4) + '...' + k.slice(-4) : '***';
 
-    if (expandedProviders.includes(p)) {
-      for (const key of keys) {
-        currentTreeItems.push({ type: 'key', provider: p, label: maskKey(key), value: '', index: index++ });
-        const keySelected = (index - 1) === settingsSelectionIdx;
-        const kHover = keySelected ? chalk.cyan('❯') : ' ';
-        const kPrefix = `      ${kHover} `;
-        if (keySelected) {
-          console.log(chalk.cyan(`${kPrefix}${maskKey(key)}`));
-        } else {
-          console.log(`${kPrefix}${chalk.gray(maskKey(key))}`);
+    for (const p of providers) {
+      const keys = draftConfig.keys?.[p] || [];
+      currentTreeItems.push({ type: 'secret_provider', provider: p, index: index++ });
+
+      const isSelected = (index - 1) === settingsSelectionIdx;
+      renderRow(capitalize(p), `${keys.length} active keys`, isSelected);
+
+      if (expandedProviders.includes(p)) {
+        for (const key of keys) {
+          currentTreeItems.push({ type: 'key', provider: p, index: index++ });
+          const keySelected = (index - 1) === settingsSelectionIdx;
+          const bg = keySelected ? chalk.bgHex('#333333').gray : chalk.gray;
+          console.log(bg(`    ↳ ${maskKey(key)}`.padEnd(80)));
         }
-      }
-      
-      currentTreeItems.push({ type: 'add', provider: p, label: '[ Press Enter to Add ]', value: '', index: index++ });
-      const addSelected = (index - 1) === settingsSelectionIdx;
-      
-      if (isInputMode && inputTarget === p) {
-        console.log(`        ${chalk.cyan('Enter new key: ')}` + chalk.bgCyan.black(` ${inputBuffer}_ `));
-      } else {
-        const aHover = addSelected ? chalk.cyan('❯') : ' ';
-        const aPrefix = `      ${aHover} `;
-        if (addSelected) {
-          console.log(chalk.cyan(`${aPrefix}[ Press Enter to Add ]`));
+
+        currentTreeItems.push({ type: 'add', provider: p, index: index++ });
+        const addSelected = (index - 1) === settingsSelectionIdx;
+        if (isInputMode && inputTarget === p) {
+          console.log(`    ↳ ${chalk.cyan('Enter new key:')} ` + chalk.bgCyan.black(` ${inputBuffer}_ `));
         } else {
-          console.log(`${aPrefix}${chalk.dim('[ Press Enter to Add ]')}`);
+          const bg = addSelected ? chalk.bgHex('#333333').gray : chalk.gray;
+          console.log(bg(`    ↳ [ Press Enter to Add ]`.padEnd(80)));
         }
       }
     }
+    console.log('\n\n  ' + chalk.gray('Enter to add/toggle · Esc to return · S to save'));
   }
-
-  console.log('\n' + chalk.gray('   [ S ] Save Changes     [ X ] Discard     [ Enter ] Edit/Toggle Item'));
 }
 function formatCompact(num: number): string {
   if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
@@ -496,12 +433,11 @@ function formatCompact(num: number): string {
 }
 
 async function renderUsage() {
-  console.log(chalk.white(' USAGE & ANALYTICS '));
-  console.log(chalk.gray.italic('  (Live load balancing distribution and provider token breakdown)'));
-  
+  console.log('\n  USAGE & ANALYTICS');
+
   let usageData: any = { providerUsage: {} };
   try {
-    const res = await fetch('http://localhost:3002/v1/keymux/usage');
+    const res = await fetch(`http://localhost:${proxyPort}/v1/keymux/usage`);
     if (res.ok) {
       usageData = await res.json() as any;
     } else {
@@ -514,22 +450,24 @@ async function renderUsage() {
   let liveStats: any[] = [];
   let activeKey = '';
   try {
-    const res = await fetch('http://localhost:3002/v1/keymux/stats');
+    const res = await fetch(`http://localhost:${proxyPort}/v1/keymux/stats`);
     if (res.ok) {
       liveStats = await res.json() as any[];
     }
-    const lrRes = await fetch('http://localhost:3002/v1/keymux/lastRoute');
+    const lrRes = await fetch(`http://localhost:${proxyPort}/v1/keymux/lastRoute`);
     if (lrRes.ok) {
       const lr: any = await lrRes.json();
       if (lr && lr.provider) activeKey = lr.key || '';
     }
   } catch(e) {}
-  console.log(chalk.cyan(`  [ ${usageViewMode === 'today' ? 'Last 24 Hours (Today)' : 'Current Session'} ]`) + chalk.gray('   (Press Enter to toggle)'));
+
+  console.log(chalk.dim(`  [ ${usageViewMode === 'today' ? 'Last 24 Hours (Today)' : 'Current Session'} ]   (Press Enter to toggle)\n`));
+
   const getTokens = (usage: any) => typeof usage === 'number' ? 0 : (usage?.tokens || 0);
   const getReqs = (usage: any) => typeof usage === 'number' ? usage : (usage?.requests || 0);
-  
+
   const currentUsageData = usageViewMode === 'today' ? (usageData.today || usageData.providerUsage) : (usageData.session || usageData.providerUsage);
-  
+
   const orUsage = currentUsageData?.openrouter;
   const nvUsage = currentUsageData?.nvidia;
   const miUsage = currentUsageData?.mistral;
@@ -540,156 +478,117 @@ async function renderUsage() {
   const miTokens = getTokens(miUsage);
   const geTokens = getTokens(geUsage);
   const gqTokens = getTokens(gqUsage);
-  const orReqs = getReqs(orUsage);
-  const nvReqs = getReqs(nvUsage);
-  const miReqs = getReqs(miUsage);
-  const geReqs = getReqs(geUsage);
-  const gqReqs = getReqs(gqUsage);
-  
+
   const totalTokens = orTokens + nvTokens + miTokens + geTokens + gqTokens;
   const orPct = totalTokens > 0 ? Math.round((orTokens / totalTokens) * 100) : 0;
   const nvPct = totalTokens > 0 ? Math.round((nvTokens / totalTokens) * 100) : 0;
   const miPct = totalTokens > 0 ? Math.round((miTokens / totalTokens) * 100) : 0;
   const gePct = totalTokens > 0 ? Math.round((geTokens / totalTokens) * 100) : 0;
   const gqPct = totalTokens > 0 ? Math.round((gqTokens / totalTokens) * 100) : 0;
-  
-  const getBar = (pct: number, color: any) => {
-    const filled = Math.round((pct / 100) * 12);
-    const filledStr = '█'.repeat(filled);
-    const emptyStr = '░'.repeat(12 - filled);
-    return color(filledStr + emptyStr);
+
+  const leftColWidth = 35;
+
+  console.log('  PROVIDER DISTRIBUTION (TOKENS)');
+  console.log('  ' + '─'.repeat(60));
+
+  const printRow = (label: string, value: string) => {
+    console.log(`  ${chalk.white(label.padEnd(leftColWidth))} ${chalk.white(value)}`);
   };
-  console.log(' PROVIDER DISTRIBUTION (TOKENS)');
-  console.log(chalk.dim(' ─────────────────────────────────────────────────────────────────'));
-  
-  const orTokenStr = `(${formatCompact(orTokens).padStart(6)} Tokens) ${orReqs ? '(' + String(orReqs).padStart(3) + ' reqs)' : ''}`.trimEnd();
-  console.log(` ${chalk.cyan('[OpenRouter]'.padEnd(14))} ${getBar(orPct, chalk.cyan)}  ${String(orPct).padStart(2)}%     ${orTokenStr}`);
-  
-  const nvTokenStr = `(${formatCompact(nvTokens).padStart(6)} Tokens) ${nvReqs ? '(' + String(nvReqs).padStart(3) + ' reqs)' : ''}`.trimEnd();
-  console.log(` ${chalk.green('[Nvidia]'.padEnd(14))} ${getBar(nvPct, chalk.green)}  ${String(nvPct).padStart(2)}%     ${nvTokenStr}`);
 
-  if (miTokens > 0 || miReqs > 0 || draftConfig.keys?.mistral?.length) {
-    const miTokenStr = `(${formatCompact(miTokens).padStart(6)} Tokens) ${miReqs ? '(' + String(miReqs).padStart(3) + ' reqs)' : ''}`.trimEnd();
-    console.log(` ${chalk.magenta('[Mistral AI]'.padEnd(14))} ${getBar(miPct, chalk.magenta)}  ${String(miPct).padStart(2)}%     ${miTokenStr}`);
-  }
-  if (geTokens > 0 || geReqs > 0 || draftConfig.keys?.gemini?.length) {
-    const geTokenStr = `(${formatCompact(geTokens).padStart(6)} Tokens) ${geReqs ? '(' + String(geReqs).padStart(3) + ' reqs)' : ''}`.trimEnd();
-    console.log(` ${chalk.blue('[Google Gemini]'.padEnd(14))} ${getBar(gePct, chalk.blue)}  ${String(gePct).padStart(2)}%     ${geTokenStr}`);
-  }
-  if (gqTokens > 0 || gqReqs > 0 || draftConfig.keys?.groq?.length) {
-    const gqTokenStr = `(${formatCompact(gqTokens).padStart(6)} Tokens) ${gqReqs ? '(' + String(gqReqs).padStart(3) + ' reqs)' : ''}`.trimEnd();
-    console.log(` ${chalk.yellow('[Groq]'.padEnd(14))} ${getBar(gqPct, chalk.yellow)}  ${String(gqPct).padStart(2)}%     ${gqTokenStr}`);
-  }
-  console.log('');
+  printRow('OpenRouter', `${formatCompact(orTokens)} Tokens (${orPct}%)`);
+  printRow('Nvidia NIM', `${formatCompact(nvTokens)} Tokens (${nvPct}%)`);
 
-  console.log(' TRAFFIC ROUTING & LOAD (REQUESTS)');
-  console.log(chalk.dim(' ─────────────────────────────────────────────────────────────────'));
-  
+  if (miTokens > 0 || getReqs(miUsage) > 0 || draftConfig.keys?.mistral?.length) {
+    printRow('Mistral AI', `${formatCompact(miTokens)} Tokens (${miPct}%)`);
+  }
+  if (geTokens > 0 || getReqs(geUsage) > 0 || draftConfig.keys?.gemini?.length) {
+    printRow('Google Gemini', `${formatCompact(geTokens)} Tokens (${gePct}%)`);
+  }
+  if (gqTokens > 0 || getReqs(gqUsage) > 0 || draftConfig.keys?.groq?.length) {
+    printRow('Groq', `${formatCompact(gqTokens)} Tokens (${gqPct}%)`);
+  }
+
+  console.log('\n  TRAFFIC ROUTING (REQUESTS)');
+  console.log('  ' + '─'.repeat(60));
+
   if (liveStats.length === 0) {
-    console.log(chalk.gray('  No active keys found.'));
+    console.log(chalk.dim('  No active keys found.'));
   } else {
-    const totalKeyReqs = liveStats.reduce((sum, s) => sum + (s.totalRequests || 0), 0);
     for (const stat of liveStats) {
       const keyStr = stat.key || '';
       let masked = keyStr;
       if (keyStr.length > 10) {
         masked = `${keyStr.substring(0, 4)}...${keyStr.slice(-4)}`;
       }
-      
+
       const reqs = stat.totalRequests || 0;
       const errs = stat.totalErrors || 0;
-      const pct = totalKeyReqs > 0 ? Math.round((reqs / totalKeyReqs) * 100) : 0;
-      
-      const isOR = (stat.id || '').startsWith('openrouter');
-      const isMI = (stat.id || '').startsWith('mistral');
-      const isGE = (stat.id || '').startsWith('gemini');
-      const isGQ = (stat.id || '').startsWith('groq');
-      const provColor = isOR ? chalk.cyan : (isMI ? chalk.magenta : (isGE ? chalk.blue : (isGQ ? chalk.yellow : chalk.green)));
-      
-      const errStr = errs === 0 ? chalk.green(`✓ ${errs} err`) : chalk.red(`✗ ${errs} err`);
-      const reqStr = `${chalk.dim('[')} ${String(reqs).padStart(3)} reqs ${chalk.dim(']')}`;
-      const activeIndicator = (activeKey && keyStr && activeKey.endsWith(keyStr.slice(-4))) ? chalk.bold.cyan('   ◀ LAST USED') : '';
-      
-      console.log(` ${masked.padEnd(14)} ${getBar(pct, provColor)}  ${String(pct).padStart(2)}%     ${reqStr}  ${errStr}${activeIndicator}`);
+
+      let label = masked;
+      if (activeKey && keyStr && activeKey.endsWith(keyStr.slice(-4))) {
+        label += chalk.dim(' (Active)');
+      }
+
+      const val = `${reqs} reqs  ${errs > 0 ? chalk.red(`[${errs} errs]`) : ''}`;
+      // Clean up ansi codes for padding calc
+      const rawLabel = label.replace(/\x1B\[\d+m/g, '');
+      const padding = Math.max(0, leftColWidth - rawLabel.length);
+      console.log(`  ${chalk.white(label)}${' '.repeat(padding)} ${chalk.white(val.trim())}`);
     }
   }
 }
 
 async function render() {
   process.stdout.write('\x1b[2J\x1b[H');
-  
+
 
   renderTabs();
-  
+
   const tab = TABS[currentTabIdx];
   if (tab === 'Stats') await renderStats();
   else if (tab === 'Status') await renderStatus();
   else if (tab === 'Usage') await renderUsage();
   else if (tab === 'Settings') renderSettings();
-  
-  console.log('' + chalk.gray('Tab to switch tabs · D for diagnostics · q to quit'));
+  console.log('' + chalk.gray('Tab to switch tabs · q to quit'));
 }
 
 
-export async function runDashboard() {  
+export async function runDashboard() {
   await render();
 
   if (process.stdin.isTTY && !isListening) {
     isListening = true;
-    
+
+    let isRendering = false;
     setInterval(async () => {
-      if (!isInputMode && !isSelectingModel && !isDiagnosticsMode) {
-        await render();
+      if (!isInputMode && !isRendering) {
+        isRendering = true;
+        try {
+          await render();
+        } finally {
+          isRendering = false;
+        }
       }
     }, 2000);
 
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdin.setEncoding('utf8');
-    
+
     process.stdin.on('data', async (key: string) => {
-
-      if (isDiagnosticsMode) {
-        if (diagnosticsComplete && (key === '\r' || key === '' || key === '\x1b' || key === ' ')) {
-          isDiagnosticsMode = false;
-          await render();
-        }
-        return;
-      }
-
-      if (key === 'D' && !isInputMode && !isSelectingModel) {
-        runDiagnosticsModal();
-        return;
-      }
 
       if (key === '\u0003' || key === 'q' && !isInputMode) {
         process.stdout.write('\x1b[2J\x1b[H');
         process.exit();
       }
 
-      if (key === 'r' && !isInputMode && !isSelectingModel) {
+      if (key === 'r' && !isInputMode) {
         await render();
         return;
       }
 
-      if (isSelectingModel) {
-        const available = getAvailableModels();
-        if (key === '\x1b[A') {
-          modelSelectionIdx = (modelSelectionIdx - 1 + available.length) % available.length;
-          await render();
-        } else if (key === '\x1b[B') {
-          modelSelectionIdx = (modelSelectionIdx + 1) % available.length;
-          await render();
-        } else if (key === '\r' || key === '') {
-          if (available[modelSelectionIdx]) draftConfig.defaultModel = available[modelSelectionIdx]!.id;
-          isSelectingModel = false;
-          await render();
-        } else if (key === '\x1b') {
-          isSelectingModel = false;
-          await render();
-        }
-        return;
-      }
+
+
 
       if (isInputMode) {
         if (key === '\r' || key === '') {
@@ -727,19 +626,27 @@ export async function runDashboard() {
 
       // Tab Navigation
       if (key === '\t' || key === '\x1b[C' || key === '\x1bOC') { // Tab or Right Arrow
-        currentTabIdx = (currentTabIdx + 1) % TABS.length; isSelectingModel = false; isInputMode = false;
+        currentTabIdx = (currentTabIdx + 1) % TABS.length; isInputMode = false;
+        settingsView = 'main'; settingsSelectionIdx = 0;
         await render();
       } else if (key === '\x1b[D' || key === '\x1bOD') { // Left Arrow
-        currentTabIdx = (currentTabIdx - 1 + TABS.length) % TABS.length; isSelectingModel = false; isInputMode = false;
+        currentTabIdx = (currentTabIdx - 1 + TABS.length) % TABS.length; isInputMode = false;
+        settingsView = 'main'; settingsSelectionIdx = 0;
         await render();
       } else if (TABS[currentTabIdx] === 'Usage' && (key === '\r' || key === '' || key === ' ')) {
         usageViewMode = usageViewMode === 'today' ? 'session' : 'today';
         await render();
       }
-      
+
       // Settings Navigation
       else if (TABS[currentTabIdx] === 'Settings') {
-        if (key === '\x1b[A' || key === '\x1bOA') { // Up Arrow
+        if (key === '\x1b' || key === '\x1b[27~') { // Escape
+          if (settingsView !== 'main') {
+            settingsView = 'main';
+            settingsSelectionIdx = 0;
+            await render();
+          }
+        } else if (key === '\x1b[A' || key === '\x1bOA') { // Up Arrow
           if (settingsSelectionIdx > 0) settingsSelectionIdx--;
           await render();
         } else if (key === '\x1b[B' || key === '\x1bOB') { // Down Arrow
@@ -748,10 +655,28 @@ export async function runDashboard() {
         } else if (key === '\r' || key === '' || key === ' ') { // Enter or Space
           const selected = currentTreeItems[settingsSelectionIdx];
           if (!selected) return;
-          if (selected.type === 'model') {
+
+          if (selected.type === 'main_mode') {
+            draftConfig.strictMode = !draftConfig.strictMode;
+            if (!draftConfig.strictMode) {
+              draftConfig.defaultModel = '';
+              draftConfig.defaultProvider = '';
+            }
+            await render();
+          } else if (selected.type === 'main_model') {
+            settingsView = 'models';
+            settingsSelectionIdx = 0;
+            await render();
+          } else if (selected.type === 'main_keys') {
+            settingsView = 'keys';
+            settingsSelectionIdx = 0;
+            await render();
+          } else if (selected.type === 'model') {
             draftConfig.defaultProvider = selected.provider;
             draftConfig.defaultModel = selected.id;
             draftConfig.strictMode = true;
+            settingsView = 'main';
+            settingsSelectionIdx = 0;
             await render();
           } else if (selected.type === 'secret_provider') {
             if (expandedProviders.includes(selected.provider)) {
@@ -767,6 +692,14 @@ export async function runDashboard() {
             inputBuffer = '';
             await render();
           }
+        } else if (key.toLowerCase() === 'm' && !isInputMode && settingsView === 'main') { // Toggle Mode
+          draftConfig.strictMode = !draftConfig.strictMode;
+          if (!draftConfig.strictMode) {
+            draftConfig.defaultModel = '';
+            draftConfig.defaultProvider = '';
+          }
+          flashMessage = draftConfig.strictMode ? '🔒 Switched to STRICT Mode' : '⚡ Switched to AUTO Mode';
+          await render();
         } else if (key.toLowerCase() === 's') { // Save
           config = JSON.parse(JSON.stringify(draftConfig));
           saveConfig(config);
@@ -775,11 +708,13 @@ export async function runDashboard() {
           await render();
         } else if (key.toLowerCase() === 'x') { // Discard
           draftConfig = JSON.parse(JSON.stringify(config));
+          settingsView = 'main';
+          settingsSelectionIdx = 0;
           flashMessage = 'Changes discarded.';
           await render();
         }
       }
-      
+
     });
   }
 }

@@ -4,7 +4,9 @@ export function translateOpenAIToAnthropic(openaiRes: any, requestedModel: strin
   
   let stop_reason = choice?.finish_reason || "end_turn";
   if (stop_reason === "stop") stop_reason = "end_turn";
-  if (stop_reason === "tool_calls") stop_reason = "tool_use";
+  if (stop_reason === "tool_calls" || stop_reason === "function_call") stop_reason = "tool_use";
+  if (stop_reason === "length") stop_reason = "max_tokens";
+  if (stop_reason === "content_filter") stop_reason = "end_turn";
   
   const anthropicRes: any = {
     id: "msg_" + Math.random().toString(36).slice(2, 11),

@@ -13,6 +13,7 @@ export interface KeyTrackerOptions {
   cooldownMs: number;
   windowMs: number;
   trackLatency: boolean;
+  onStateChange?: (keyId: string, state: CircuitState) => void;
   onDebug?: (event: DebugEvent) => void;
 }
 
@@ -83,6 +84,7 @@ export class KeyTracker {
     return Array.from(this.keys.values()).filter(state => {
       if (state.circuitState === CircuitState.OPEN) {
         if (now >= state.cooldownUntil) {
+          this.transitionToHealthy(state);
           return state.rpm < state.config.rpmLimit!;
         }
         return false;
@@ -92,10 +94,24 @@ export class KeyTracker {
   }
 
   /**
-   * Record a successful request
-   * Increments RPM count (if requested), updates latency, resets failures
+   * Record a request attempt (reservation)
+   * Increments RPM count without touching failures or circuit state.
    */
-  recordSuccess(keyId: string, latencyMs?: number, incrementRpm: boolean = true): void {
+  recordAttempt(keyId: string): void {
+    const state = this.keys.get(keyId);
+    if (!state) return;
+
+    state.requestTimestamps.push(Date.now());
+    state.rpm = state.requestTimestamps.length;
+    state.lastUsed = Date.now();
+    state.totalRequests++;
+  }
+
+  /**
+   * Record a successful request completion
+   * Updates latency, resets failures. Does NOT increment RPM by default (done in recordAttempt).
+   */
+  recordSuccess(keyId: string, latencyMs?: number, incrementRpm: boolean = false): void {
     const state = this.keys.get(keyId);
     if (!state) return;
 
@@ -131,7 +147,7 @@ export class KeyTracker {
    * Record a failed request (rate limit, server error, etc.)
    * Triggers circuit breaker logic
    */
-  recordFailure(keyId: string, isRateLimit: boolean = false, incrementRpm: boolean = true): void {
+  recordFailure(keyId: string, isRateLimit: boolean = false, incrementRpm: boolean = false): void {
     const state = this.keys.get(keyId);
     if (!state) return;
 
@@ -155,6 +171,9 @@ export class KeyTracker {
     } else if (state.failures >= Math.ceil(this.options.failureThreshold / 2)) {
       if (state.circuitState === CircuitState.HEALTHY) {
         state.circuitState = CircuitState.DEGRADED;
+        if (this.options.onStateChange) {
+          this.options.onStateChange(keyId, CircuitState.DEGRADED);
+        }
         this.emitDebug({
           type: 'key_failed',
           keyId,
@@ -240,6 +259,9 @@ export class KeyTracker {
     state.cooldownUntil = 0;
 
     if (wasUnhealthy) {
+      if (this.options.onStateChange) {
+        this.options.onStateChange(state.config.id, CircuitState.HEALTHY);
+      }
       this.emitDebug({
         type: 'key_recovered',
         keyId: state.config.id,
@@ -254,6 +276,10 @@ export class KeyTracker {
     state.circuitState = CircuitState.OPEN;
     state.cooldownUntil = Date.now() + this.options.cooldownMs;
 
+    if (this.options.onStateChange) {
+      this.options.onStateChange(state.config.id, CircuitState.OPEN);
+    }
+    
     this.emitDebug({
       type: 'circuit_opened',
       keyId: state.config.id,

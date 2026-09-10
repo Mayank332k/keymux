@@ -8,6 +8,7 @@ export class OpenRouterStreamTranslator {
   toolIndexMap: Record<number, number>;
   state: 'NORMAL' | 'POTENTIAL_START' | 'IN_THINKING' | 'POTENTIAL_END';
   buffer: string;
+  _thinkTag: string;
   hasSentMessageStart: boolean;
 
   constructor(res: http.ServerResponse, requestedModel: string) {
@@ -19,6 +20,7 @@ export class OpenRouterStreamTranslator {
     this.toolIndexMap = {};
     this.state = 'NORMAL';
     this.buffer = '';
+    this._thinkTag = '<thinking>';
     this.hasSentMessageStart = false;
   }
   
@@ -115,12 +117,17 @@ export class OpenRouterStreamTranslator {
           }
         } else if (this.state === 'POTENTIAL_START') {
           this.buffer += char;
-          const target = "<thinking>";
-          if (this.buffer === target) {
+          // Support both <thinking> and <think> tags
+          const targets = ["<thinking>", "<think>"];
+          const matchedTarget = targets.find(t => t === this.buffer);
+          const partialMatch = targets.some(t => t.startsWith(this.buffer));
+          
+          if (matchedTarget) {
             this.state = 'IN_THINKING';
+            this._thinkTag = matchedTarget; // remember which tag opened
             this.buffer = '';
             this.startBlock("thinking");
-          } else if (!target.startsWith(this.buffer)) {
+          } else if (!partialMatch || this.buffer.length > 20) {
             if (this.currentBlockType !== "text") {
               this.startBlock("text");
             }
@@ -148,12 +155,13 @@ export class OpenRouterStreamTranslator {
           }
         } else if (this.state === 'POTENTIAL_END') {
           this.buffer += char;
-          const target = "</thinking>";
-          if (this.buffer === target) {
+          // Build closing tag from whichever opening tag was used
+          const closeTag = this._thinkTag === "<think>" ? "</think>" : "</thinking>";
+          if (this.buffer === closeTag) {
             this.state = 'NORMAL';
             this.buffer = '';
             this.startBlock("text");
-          } else if (!target.startsWith(this.buffer)) {
+          } else if (!closeTag.startsWith(this.buffer) || this.buffer.length > 20) {
             if (this.currentBlockType !== "thinking") {
               this.startBlock("thinking");
             }
@@ -197,8 +205,9 @@ export class OpenRouterStreamTranslator {
     this.stopCurrentBlock();
     
     const stop_reason = finishReason === "stop" || finishReason === null ? ((this as any).stopSequences && (this as any).stopSequences.length > 0 ? "stop_sequence" : "end_turn") 
-                      : finishReason === "tool_calls" ? "tool_use"
+                      : (finishReason === "tool_calls" || finishReason === "function_call") ? "tool_use"
                       : finishReason === "length" ? "max_tokens"
+                      : finishReason === "content_filter" ? "end_turn"
                       : finishReason || "end_turn";
                       
     const inputTokens = streamUsage?.prompt_tokens || 0;

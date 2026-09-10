@@ -40,6 +40,21 @@ export class KeyRouter {
       onDebug: config.onDebug ?? (() => {})
     };
 
+    if (this.config.defaultRpmLimit <= 0) throw new KeyRouterErrorClass('Invalid config: defaultRpmLimit must be > 0', 'INVALID_CONFIG');
+    if (this.config.defaultWeight <= 0) throw new KeyRouterErrorClass('Invalid config: defaultWeight must be > 0', 'INVALID_CONFIG');
+    if (this.config.failureThreshold <= 0) throw new KeyRouterErrorClass('Invalid config: failureThreshold must be > 0', 'INVALID_CONFIG');
+    if (this.config.cooldownMs <= 0) throw new KeyRouterErrorClass('Invalid config: cooldownMs must be > 0', 'INVALID_CONFIG');
+    if (this.config.windowMs <= 0) throw new KeyRouterErrorClass('Invalid config: windowMs must be > 0', 'INVALID_CONFIG');
+
+    for (const key of this.config.keys) {
+      if (key.rpmLimit !== undefined && key.rpmLimit <= 0) {
+        throw new KeyRouterErrorClass('Invalid config: rpmLimit must be > 0', 'INVALID_CONFIG');
+      }
+      if (key.weight !== undefined && key.weight <= 0) {
+        throw new KeyRouterErrorClass('Invalid config: weight must be > 0', 'INVALID_CONFIG');
+      }
+    }
+
     this.tracker = new KeyTracker({
       defaultRpmLimit: this.config.defaultRpmLimit,
       defaultWeight: this.config.defaultWeight,
@@ -47,6 +62,7 @@ export class KeyRouter {
       cooldownMs: this.config.cooldownMs,
       windowMs: this.config.windowMs,
       trackLatency: this.config.trackLatency,
+      onStateChange: this.config.onStateChange,
       onDebug: this.config.onDebug
     });
 
@@ -121,8 +137,8 @@ export class KeyRouter {
       throw new RateLimitErrorClass('all');
     }
 
-    // Record the selection
-    this.tracker.recordSuccess(selected.config.id);
+    // Record the selection attempt (reserves RPM)
+    this.tracker.recordAttempt(selected.config.id);
 
     return selected.config.key;
   }
@@ -148,8 +164,6 @@ export class KeyRouter {
     if (!selected) {
       throw new RateLimitErrorClass('all');
     }
-
-    this.tracker.recordSuccess(selected.config.id);
 
     const limit = selected.config.rpmLimit ?? this.config.defaultRpmLimit;
     return {

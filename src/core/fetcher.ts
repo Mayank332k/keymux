@@ -9,6 +9,8 @@ export interface FetchConfig {
   model?: string;
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function fetchWithFailover(
   urlBuilder: (ep: EndpointResult) => string | URL,
   fetchOptionsBuilder: (ep: EndpointResult) => RequestInit,
@@ -21,7 +23,7 @@ export async function fetchWithFailover(
   let lastError: Error | null = null;
   const dynamicExcludeProviders = [...(config.excludeProviders || [])];
 
-  while (attempts <= maxRetries) {
+  while (attempts < maxRetries) {
     attempts++;
     
     let ep: EndpointResult;
@@ -32,7 +34,7 @@ export async function fetchWithFailover(
         model: config.model
       });
     } catch (error: any) {
-      if (attempts > maxRetries) continue;
+      if (attempts >= maxRetries) continue;
       
       if (lastResponse) {
         return lastResponse;
@@ -83,7 +85,9 @@ export async function fetchWithFailover(
         const isRateLimit = response.status === 429;
         router.reportFailure(ep.endpointId, isRateLimit);
         
-        // Removed dangerous body cancel
+        if (response.status === 429 || response.status >= 500) {
+          await sleep(Math.min(1000 * Math.pow(2, attempts - 1), 10000));
+        }
         
         continue;
       }

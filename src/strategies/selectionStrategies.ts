@@ -231,6 +231,32 @@ export class RandomStrategy implements SelectionStrategy {
 }
 
 /**
+ * Round Robin Strategy
+ * Selects keys in sequential order (using oldest lastUsed timestamp).
+ */
+export class RoundRobinStrategy implements SelectionStrategy {
+  name = 'round-robin';
+  private index = 0;
+
+  select(keys: KeyState[], options?: SelectionOptions): KeyState | null {
+    if (keys.length === 0) return null;
+
+    let candidates = keys;
+    if (options?.maxUtilization != null) {
+      candidates = keys.filter(k => {
+        const limit = k.config.rpmLimit ?? 40;
+        return limit > 0 ? (k.rpm / limit <= options.maxUtilization!!) : true;
+      });
+      if (candidates.length === 0) return null;
+    }
+
+    const selected = candidates[this.index % candidates.length];
+    this.index++;
+    return selected || null;
+  }
+}
+
+/**
  * Strategy Factory - creates strategy by name
  */
 export function createStrategy(name: string, fallback?: SelectionStrategy): SelectionStrategy {
@@ -240,6 +266,7 @@ export function createStrategy(name: string, fallback?: SelectionStrategy): Sele
     case 'least-requests':
       return new LeastRequestsStrategy();
     case 'round-robin':
+      return new RoundRobinStrategy();
     case 'smart':
       return new SmartRoutingStrategy();
     case 'least-latency':

@@ -92,6 +92,19 @@ export class MultiProviderRouter {
       onDebug: config?.onDebug ?? (() => {}),
     };
 
+    if (this.config.failureThreshold <= 0) throw new KeyRouterError('Invalid config: failureThreshold must be > 0', 'INVALID_CONFIG');
+    if (this.config.cooldownMs <= 0) throw new KeyRouterError('Invalid config: cooldownMs must be > 0', 'INVALID_CONFIG');
+    if (this.config.windowMs <= 0) throw new KeyRouterError('Invalid config: windowMs must be > 0', 'INVALID_CONFIG');
+
+    for (const provider of this.providers) {
+      if (provider.rpmLimit !== undefined && provider.rpmLimit <= 0) {
+        throw new KeyRouterError('Invalid config: rpmLimit must be > 0', 'INVALID_CONFIG');
+      }
+      if (provider.weight !== undefined && provider.weight <= 0) {
+        throw new KeyRouterError('Invalid config: weight must be > 0', 'INVALID_CONFIG');
+      }
+    }
+
     // Create the tracker (same engine KeyRouter uses internally)
     this.tracker = new KeyTracker({
       defaultRpmLimit: 40,
@@ -100,6 +113,7 @@ export class MultiProviderRouter {
       cooldownMs: this.config.cooldownMs,
       windowMs: this.config.windowMs,
       trackLatency: this.config.trackLatency,
+      onStateChange: this.config.onStateChange,
       onDebug: this.config.onDebug,
     });
 
@@ -181,8 +195,8 @@ export class MultiProviderRouter {
       throw new RateLimitError('all');
     }
 
-    // Record the selection (RPM tracking)
-    this.tracker.recordSuccess(selected.config.id);
+    // Record the selection attempt (reserves RPM)
+    this.tracker.recordAttempt(selected.config.id);
     const m = this.endpointMap.get(selected.config.id);
     if (m) {
       this.lastRoute = {
@@ -335,7 +349,8 @@ export class MultiProviderRouter {
       );
     }
 
-    this.providers.push(entry);
+    const clonedEntry = JSON.parse(JSON.stringify(entry));
+    this.providers.push(clonedEntry);
     this.rebuildPool();
   }
 
@@ -351,7 +366,8 @@ export class MultiProviderRouter {
       );
     }
 
-    entry.keys.push(key);
+    const clonedKey = JSON.parse(JSON.stringify(key));
+    entry.keys.push(clonedKey);
     this.rebuildPool();
   }
 

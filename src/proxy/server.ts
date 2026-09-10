@@ -12,6 +12,7 @@ import {
   OpenRouterStreamTranslator,
   NvidiaStreamTranslator
 } from "./translators";
+import { maskKey } from "../utils/helpers";
 
 export interface ProxyServerOptions {
   port?: number;
@@ -44,12 +45,13 @@ function loadConfig(configPath: string) {
 }
 
 function createRouterInstance(config: any) {
-  let nvidiaKeys = config.keys?.nvidia || [];
-  let openRouterKeys = config.keys?.openrouter || [];
-  let mistralKeys = config.keys?.mistral || [];
-  let geminiKeys = config.keys?.gemini || [];
-  let groqKeys = config.keys?.groq || [];
-  
+  const keysObj = config?.keys || {};
+  let nvidiaKeys = Array.isArray(keysObj.nvidia) ? keysObj.nvidia : [];
+  let openRouterKeys = Array.isArray(keysObj.openrouter) ? keysObj.openrouter : [];
+  let mistralKeys = Array.isArray(keysObj.mistral) ? keysObj.mistral : [];
+  let geminiKeys = Array.isArray(keysObj.gemini) ? keysObj.gemini : [];
+  let groqKeys = Array.isArray(keysObj.groq) ? keysObj.groq : [];
+
   if (nvidiaKeys.length === 0) {
     nvidiaKeys = parseKeyList(process.env['NVIDIA_KEYS']);
   }
@@ -103,29 +105,20 @@ function createRouterInstance(config: any) {
   });
 }
 
-function maskKey(key: string | undefined): string {
-  return key ? key.substring(0, 8) + '...' : 'none';
-}
-
 function logUsage(provider: string, model: string, key: string | undefined, attempts: number, failoverReason: string, anthropicReq: any) {
+  if (process.env['KEYMUX_ENABLE_LOGGING'] !== 'true') return;
+
   try {
-    let query = "";
-    if (anthropicReq.messages && anthropicReq.messages.length > 0) {
-      const lastMsg = anthropicReq.messages[anthropicReq.messages.length - 1];
-      if (typeof lastMsg.content === 'string') {
-        query = lastMsg.content;
-      } else if (Array.isArray(lastMsg.content)) {
-        query = lastMsg.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join(" ");
-      }
-    }
-    query = query.replace(/\n/g, " ");
-    const shortQuery = query.length > 100 ? query.substring(0, 100) + '...' : query;
-    const maskedKeyStr = maskKey(key);
-    
+    const maskedKeyStr = key ? maskKey(key) : 'none';
     let statusStr = attempts > 1 ? `[FAILOVER #${attempts} | Prev Reason: ${failoverReason}]` : `[PRIMARY TRY #1]`;
-    
-    const logLine = `[${new Date().toISOString()}] ${statusStr.padEnd(50)} | Provider: ${provider.padEnd(10)} | Key: ${maskedKeyStr.padEnd(15)} | Model: ${model.padEnd(30)} | Query: ${shortQuery}\n`;
-    const logPath = path.join(os.homedir(), '.claude', 'queries.log');
+
+    // Privacy: Do not log the user's prompt text
+    const logLine = `[${new Date().toISOString()}] ${statusStr.padEnd(50)} | Provider: ${provider.padEnd(10)} | Key: ${maskedKeyStr.padEnd(15)} | Model: ${model.padEnd(30)} | Query: <redacted for privacy>\n`;
+
+    const logDir = path.join(os.homedir(), '.claude');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+
+    const logPath = path.join(logDir, 'queries.log');
     if (fs.existsSync(logPath) && fs.statSync(logPath).size > 5 * 1024 * 1024) {
       fs.renameSync(logPath, logPath.replace('queries.log', 'queries.old.log'));
     }
@@ -155,14 +148,16 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
 
   (global as any).isConfigReloading = false;
 
-  serverInstance = http.createServer(async (req, res) => { 
+  serverInstance = http.createServer(async (req, res) => {
     if ((global as any).isConfigReloading) {
       await new Promise(r => setTimeout(r, 100));
     }
 
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "*");
+    if (!req.url?.startsWith("/v1/keymux/")) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+    }
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -181,35 +176,65 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
       return sendJson(res, 200, { status: "ok", service: "keymux-proxy" });
     }
 
-    if (req.method === "POST" && req.url === "/v1/keymux/reload") {
-      (global as any).isConfigReloading = true;
-      config = loadConfig(configPath);
-      router = createRouterInstance(config);
-      console.log("[keymux] Proxy settings reloaded");
-      (global as any).isConfigReloading = false;
-      return sendJson(res, 200, { status: "reloaded" });
-    }
+    // Admin routes
+    if (req.url?.startsWith("/v1/keymux/")) {
+      const adminToken = process.env['KEYMUX_ADMIN_TOKEN'];
+      if (adminToken) {
+         const authHeader = req.headers.authorization || '';
+         if (authHeader !== `Bearer ${adminToken}`) {
+            return sendJson(res, 401, { error: "Unauthorized" });
+         }
+      }
 
-    if (req.method === "GET" && req.url === "/v1/keymux/lastRoute") {
-      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
-      const lastRoute = typeof router.getLastRoute === 'function' ? router.getLastRoute() : null;
-      res.end(JSON.stringify(lastRoute || {}));
-      return;
-    }
+      if (req.method === "POST" && req.url === "/v1/keymux/reload") {
+        try {
+          const newConfig = loadConfig(configPath);
+          const newRouter = createRouterInstance(newConfig);
 
-    if (req.method === "GET" && req.url === "/v1/keymux/stats") {
-      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
-      res.end(JSON.stringify(router.getStats()));
-      return;
-    }
+          (global as any).isConfigReloading = true;
+          config = newConfig;
+          router = newRouter;
+          console.log("[keymux] Proxy settings reloaded");
+          return sendJson(res, 200, { status: "reloaded" });
+        } catch (err: any) {
+          console.error("[keymux] Proxy reload failed:", err);
+          return sendJson(res, 500, { error: "reload failed", details: err.message });
+        } finally {
+          (global as any).isConfigReloading = false;
+        }
+      }
 
-    if (req.method === "GET" && req.url === "/v1/keymux/usage") {
-      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
-      res.end(JSON.stringify({ 
-        session: globalUsageTracker.getSessionUsage(), 
-        today: globalUsageTracker.getTodayUsage() 
-      }));
-      return;
+      if (req.method === "GET" && req.url === "/v1/keymux/lastRoute") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        const lastRoute = typeof router.getLastRoute === 'function' ? router.getLastRoute() : null;
+        res.end(JSON.stringify(lastRoute || {}));
+        return;
+      }
+
+      if (req.method === "GET" && req.url === "/v1/keymux/activeModel") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          mode: config.strictMode ? 'STRICT' : 'AUTO',
+          model: config.defaultModel || 'auto',
+          provider: config.defaultProvider || 'auto',
+        }));
+        return;
+      }
+
+      if (req.method === "GET" && req.url === "/v1/keymux/stats") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(router.getStats()));
+        return;
+      }
+
+      if (req.method === "GET" && req.url === "/v1/keymux/usage") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          session: globalUsageTracker.getSessionUsage(),
+          today: globalUsageTracker.getTodayUsage()
+        }));
+        return;
+      }
     }
 
     // Model discovery for Claude Desktop / Gateway
@@ -269,8 +294,14 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
 
     if (req.method === "POST" && req.url?.includes("/v1/messages")) {
       let bodyStr = "";
+      const MAX_BODY_SIZE = 25 * 1024 * 1024; // 25MB limit for image attachments
       req.on("data", (chunk) => {
         bodyStr += chunk;
+        if (bodyStr.length > MAX_BODY_SIZE) {
+          req.destroy();
+          res.writeHead(413, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Payload Too Large" }));
+        }
       });
 
       req.on("end", async () => {
@@ -322,28 +353,36 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
                 console.log(`[PROXY] Attempt ${attempts}: Routing to ${ep.provider} (${ep.model})`);
                 logUsage(ep.provider, ep.model, ep.key, attempts, lastErrorReason, anthropicReq);
 
-                let targetModel = config.strictMode ? config.defaultModel : (anthropicReq.model || ep.model || MODEL_NAME);
-                
+                let targetModel = config.defaultModel || anthropicReq.model || ep.model || MODEL_NAME;
+
                 if (targetModel.startsWith('claude-3-5-sonnet-') && targetModel !== 'claude-3-5-sonnet-20240620') {
                     targetModel = targetModel.replace('claude-3-5-sonnet-', '');
                 }
-                
+
+                // AUTO MODE: Smart Provider-Model Translation
                 if (!config.strictMode) {
-                  // Automatic Provider-Model Translation for Failovers
-                  if (ep.provider === 'nvidia' && !targetModel.startsWith('nvidia/')) {
-                    targetModel = 'nvidia/nemotron-3-ultra-550b-a55b'; // massive context
-                  } else if (ep.provider === 'mistral' && !targetModel.startsWith('mistral') && !targetModel.startsWith('codestral')) {
+                  if (ep.provider === 'nvidia' && !targetModel.startsWith('nvidia/') && !targetModel.startsWith('deepseek')) {
+                    targetModel = 'nvidia/nemotron-3-super-120b-a12b';
+                  } else if (ep.provider === 'mistral' && !targetModel.startsWith('mistral') && !targetModel.startsWith('codestral') && !targetModel.startsWith('devstral')) {
                     targetModel = 'codestral-latest';
                   } else if (ep.provider === 'gemini' && !targetModel.startsWith('gemini')) {
-                    targetModel = 'gemini-1.5-flash';
-                  } else if (ep.provider === 'groq' && !targetModel.startsWith('llama-3.1')) {
+                    targetModel = 'gemini-3.5-flash-lite';
+                  } else if (ep.provider === 'groq' && !targetModel.startsWith('llama') && !targetModel.startsWith('groq/')) {
                     targetModel = 'llama-3.1-70b-versatile';
-                  } else if (ep.provider === 'openrouter' && (targetModel.startsWith('nvidia/') || targetModel.startsWith('mistral') || targetModel.startsWith('codestral') || targetModel.startsWith('gemini') || targetModel.startsWith('llama') || targetModel.startsWith('claude'))) {
-                    targetModel = 'minimax/minimax-m3';
+                  } else if (ep.provider === 'openrouter' && targetModel.startsWith('nvidia/')) {
+                    targetModel = 'qwen/qwen3.8-27b';
                   }
                 }
 
                 openaiReq.model = targetModel;
+
+                // Only enable reasoning for providers/models that support it
+                if (ep.provider === 'openrouter' || targetModel.includes('deepseek')) {
+                  openaiReq.include_reasoning = true;
+                } else {
+                  delete openaiReq.include_reasoning;
+                }
+
                 const postData = JSON.stringify(openaiReq);
                 finalEp = ep;
                 return {
@@ -373,14 +412,14 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
                }
                lastErrorReason = `${ep.provider} HTTP ${fetchRes.status}`;
                console.error(`[PROXY] Provider ${ep.provider} failed with ${fetchRes.status}: ${errorData}`);
-               
+
                let customMessage = `[Keymux Gateway] Provider error (${fetchRes.status}): ${errorData.substring(0, 150)}`;
                const lowerErr = errorData.toLowerCase();
-               
+
                if (lowerErr.includes("tokens limit") || lowerErr.includes("context") || lowerErr.includes("too large")) {
                    customMessage = `[Keymux Gateway] Context window exceeded! Your prompt is too large for the current model. Please clear some history or switch to a larger model via 'keymux -d'. (Details: ${errorData.substring(0, 150)})`;
                } else if (fetchRes.status === 402 || fetchRes.status === 429) {
-                   customMessage = `[Keymux Gateway] All API keys are exhausted, out of credits, or rate-limited. Tried all failover options. Please wait or add fresh keys via 'keymux -d'.`;
+                   customMessage = `[Keymux Gateway] All available APIs for this model are currently exhausted (rate-limited or out of credits). Please try again in a few minutes, or change your Provider/Model via 'keymux -d'.`;
                }
 
                res.writeHead(fetchRes.status, { "Content-Type": "application/json" });
@@ -426,7 +465,7 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
             let buffer = "";
             let streamUsage: any = null;
             let generatedText = "";
-            
+
             if (!fetchRes.body) {
                res.end();
                return;
@@ -434,20 +473,21 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
 
             const reader = (fetchRes.body as any).getReader();
             const decoder = new TextDecoder();
-            
+
             let ttftRecorded = false;
             let ttftMs = Date.now() - startedAt;
 
+            let streamFailed = false;
             try {
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                
+
                 if (!ttftRecorded) {
                     ttftRecorded = true;
                     ttftMs = Date.now() - startedAt;
                 }
-                
+
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split("\n");
                 buffer = lines.pop() || ""; // keep last incomplete line in buffer
@@ -475,33 +515,36 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
             } catch(e) {
                console.error("[PROXY] Stream read error:", e);
                router.reportFailure(ep.endpointId, false);
+               streamFailed = true;
             }
 
-            router.reportSuccess(ep.endpointId, ttftMs);
-            
-            let inputTokens = streamUsage?.prompt_tokens || 0;
-            let outputTokens = streamUsage?.completion_tokens || 0;
-            
-            if (inputTokens === 0 && outputTokens === 0) {
-              // Fallback token counting
-              inputTokens = Math.ceil(JSON.stringify(anthropicReq.messages || []).length / 4);
-              outputTokens = Math.ceil(generatedText.length / 4);
+            if (!streamFailed) {
+              router.reportSuccess(ep.endpointId, ttftMs);
+
+              let inputTokens = streamUsage?.prompt_tokens || 0;
+              let outputTokens = streamUsage?.completion_tokens || 0;
+
+              if (inputTokens === 0 && outputTokens === 0) {
+                inputTokens = Math.ceil(JSON.stringify(anthropicReq.messages || []).length / 4);
+                outputTokens = Math.ceil(generatedText.length / 4);
+              }
+
+              if (globalUsageTracker) {
+                globalUsageTracker.recordRequest(ep.provider, inputTokens, outputTokens, 0);
+              }
+              translator.finish(streamUsage, streamUsage ? "stop" : null);
             }
-            
-            if (globalUsageTracker) globalUsageTracker.recordRequest(ep.provider, inputTokens, outputTokens, 0);
-            
-            translator.finish(streamUsage, streamUsage ? "stop" : null);
             res.end();
 
           } catch (error: any) {
             console.error("[PROXY] fetchWithFailover Error:", error);
-            
+
             let customMessage = "[Keymux Gateway] API Error occurred.";
-            
+
             if (error.message?.includes("timeout") || error.name === 'AbortError') {
               customMessage = "[Keymux Gateway] The model provider is not responding (Timeout > 60s). The server might be down or overloaded. Please try changing your Default Model or Provider via 'keymux -d'.";
             } else if (error.message?.includes("exhausted") || error.name === 'RateLimitError') {
-              customMessage = "[Keymux Gateway] All API keys are currently rate-limited or blocked. Tried all failover options but none succeeded. Please wait a few minutes for the cooldown, or add fresh keys via 'keymux -d'.";
+              customMessage = "[Keymux Gateway] All available APIs for this model are currently exhausted (rate-limited or down). Please try again in a few minutes, or change your Provider/Model via 'keymux -d'.";
             } else {
               customMessage = `[Keymux Gateway] ${error.message}`;
             }
@@ -515,7 +558,7 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
               }
             }));
           }
-        
+
         } catch (err) {
           sendJson(res, 400, { error: "Invalid JSON" });
         }
@@ -526,8 +569,8 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
     }
   });
 
-  serverInstance.listen(port, () => {
-    console.log(`[keymux] HTTP Proxy Server listening on port ${port}`);
+  serverInstance.listen(port, '127.0.0.1', () => {
+    console.log(`[keymux] HTTP Proxy Server listening on 127.0.0.1:${port}`);
   });
 
   return serverInstance;

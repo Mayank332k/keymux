@@ -160,7 +160,7 @@ export interface SelectionOptions {
 export class KeyRouterError extends Error {
   constructor(
     message: string,
-    public readonly code: 'ALL_KEYS_EXHAUSTED' | 'NO_KEYS_CONFIGURED' | 'KEY_NOT_FOUND' | 'CIRCUIT_OPEN',
+    public readonly code: 'ALL_KEYS_EXHAUSTED' | 'NO_KEYS_CONFIGURED' | 'KEY_NOT_FOUND' | 'CIRCUIT_OPEN' | 'INVALID_CONFIG',
     public readonly keyId?: string
   ) {
     super(message);

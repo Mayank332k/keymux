@@ -252,40 +252,7 @@ export function createMultiProviderRouterFromEnv(
 import { fetchWithFailover } from './core/fetcher';
 export { fetchWithFailover };
 
-/**
- * Default export for convenience
- */
-export default {
-  KeyRouter,
-  KeyTracker,
-  MultiProviderRouter,
-  createNvidiaRouter,
-  createRouter,
-  createRouterFromEnv,
-  createMultiProviderRouter,
-  createMultiProviderRouterFromEnv,
-  WeightedLeastUtilizationStrategy,
-  LeastRequestsStrategy,
-  SmartRoutingStrategy,
-  LeastLatencyStrategy,
-  PreferredKeysStrategy,
-  RandomStrategy,
-  createStrategy,
-  defaultStrategy,
-  isRateLimitError,
-  isServerError,
-  isRetryableError,
-  calculateBackoff,
-  maskKey,
-  parseKeys,
-  createKeyGetter,
-  createFailoverKeyGetter,
-  sleep,
-  formatStats,
-  createStatsLogger,
-  PROVIDER_PRESETS,
-  fetchWithFailover
-};export * from './core/usageTracker';
+export * from './core/usageTracker';
 
 // Proxy server exports
 export { startProxyServer, stopProxyServer } from './proxy/server';
