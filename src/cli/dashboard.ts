@@ -538,18 +538,39 @@ async function renderUsage() {
   }
 }
 
+let lastFrameBuffer = '';
+
 async function render() {
-  process.stdout.write('\x1b[2J\x1b[H');
+  let frameBuffer = '';
+  const originalLog = console.log;
+  const originalWrite = process.stdout.write;
 
+  console.log = (...args: any[]) => {
+    frameBuffer += args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') + '\n';
+  };
+  process.stdout.write = ((chunk: any) => {
+    frameBuffer += chunk.toString();
+    return true;
+  }) as any;
 
-  renderTabs();
+  try {
+    renderTabs();
 
-  const tab = TABS[currentTabIdx];
-  if (tab === 'Stats') await renderStats();
-  else if (tab === 'Status') await renderStatus();
-  else if (tab === 'Usage') await renderUsage();
-  else if (tab === 'Settings') renderSettings();
-  console.log('' + chalk.gray('Tab to switch tabs · q to quit'));
+    const tab = TABS[currentTabIdx];
+    if (tab === 'Stats') await renderStats();
+    else if (tab === 'Status') await renderStatus();
+    else if (tab === 'Usage') await renderUsage();
+    else if (tab === 'Settings') renderSettings();
+    console.log('' + chalk.gray('Tab to switch tabs · q to quit'));
+  } finally {
+    console.log = originalLog;
+    process.stdout.write = originalWrite;
+  }
+
+  if (frameBuffer !== lastFrameBuffer) {
+    process.stdout.write('\x1b[2J\x1b[H' + frameBuffer);
+    lastFrameBuffer = frameBuffer;
+  }
 }
 
 
