@@ -100,42 +100,56 @@ export class OpenRouterStreamTranslator {
     }
 
     if (typeof delta.content === 'string' && delta.content.length > 0) {
+      let pendingText = "";
+      let pendingThinking = "";
+
+      const flushText = () => {
+        if (pendingText.length > 0) {
+          if (this.currentBlockType !== "text") this.startBlock("text");
+          this.writeEvent("content_block_delta", {
+            type: "content_block_delta",
+            index: this.currentBlockIndex,
+            delta: { type: "text_delta", text: pendingText }
+          });
+          pendingText = "";
+        }
+      };
+
+      const flushThinking = () => {
+        if (pendingThinking.length > 0) {
+          if (this.currentBlockType !== "thinking") this.startBlock("thinking");
+          this.writeEvent("content_block_delta", {
+            type: "content_block_delta",
+            index: this.currentBlockIndex,
+            delta: { type: "thinking_delta", thinking: pendingThinking }
+          });
+          pendingThinking = "";
+        }
+      };
+
       for (const char of delta.content) {
         if (this.state === 'NORMAL') {
           if (char === '<') {
             this.state = 'POTENTIAL_START';
             this.buffer = char;
           } else {
-            if (this.currentBlockType !== "text") {
-              this.startBlock("text");
-            }
-            this.writeEvent("content_block_delta", {
-              type: "content_block_delta",
-              index: this.currentBlockIndex,
-              delta: { type: "text_delta", text: char }
-            });
+            pendingText += char;
           }
         } else if (this.state === 'POTENTIAL_START') {
           this.buffer += char;
-          // Support both <thinking> and <think> tags
           const targets = ["<thinking>", "<think>"];
           const matchedTarget = targets.find(t => t === this.buffer);
           const partialMatch = targets.some(t => t.startsWith(this.buffer));
           
           if (matchedTarget) {
+            flushText(); // Flush any accumulated text before switching to thinking
             this.state = 'IN_THINKING';
-            this._thinkTag = matchedTarget; // remember which tag opened
+            this._thinkTag = matchedTarget;
             this.buffer = '';
             this.startBlock("thinking");
           } else if (!partialMatch || this.buffer.length > 20) {
-            if (this.currentBlockType !== "text") {
-              this.startBlock("text");
-            }
-            this.writeEvent("content_block_delta", {
-              type: "content_block_delta",
-              index: this.currentBlockIndex,
-              delta: { type: "text_delta", text: this.buffer }
-            });
+            // False alarm: not a thinking tag. Add the buffered characters to text.
+            pendingText += this.buffer;
             this.state = 'NORMAL';
             this.buffer = '';
           }
@@ -144,37 +158,28 @@ export class OpenRouterStreamTranslator {
             this.state = 'POTENTIAL_END';
             this.buffer = char;
           } else {
-            if (this.currentBlockType !== "thinking") {
-              this.startBlock("thinking");
-            }
-            this.writeEvent("content_block_delta", {
-              type: "content_block_delta",
-              index: this.currentBlockIndex,
-              delta: { type: "thinking_delta", thinking: char }
-            });
+            pendingThinking += char;
           }
         } else if (this.state === 'POTENTIAL_END') {
           this.buffer += char;
-          // Build closing tag from whichever opening tag was used
           const closeTag = this._thinkTag === "<think>" ? "</think>" : "</thinking>";
           if (this.buffer === closeTag) {
+            flushThinking(); // Flush any accumulated thinking text before ending
             this.state = 'NORMAL';
             this.buffer = '';
             this.startBlock("text");
           } else if (!closeTag.startsWith(this.buffer) || this.buffer.length > 20) {
-            if (this.currentBlockType !== "thinking") {
-              this.startBlock("thinking");
-            }
-            this.writeEvent("content_block_delta", {
-              type: "content_block_delta",
-              index: this.currentBlockIndex,
-              delta: { type: "thinking_delta", thinking: this.buffer }
-            });
+            // False alarm: not a closing tag. Add the buffered characters to thinking text.
+            pendingThinking += this.buffer;
             this.state = 'IN_THINKING';
             this.buffer = '';
           }
         }
       }
+      
+      // Flush any remaining accumulated text at the end of the chunk
+      flushText();
+      flushThinking();
     }
     
     if (delta.tool_calls) {
@@ -202,9 +207,30 @@ export class OpenRouterStreamTranslator {
 
   finish(streamUsage: any, finishReason: any) {
     this.startMessage(); 
+    
+    // Flush any lingering buffer from the state machine if stream ends abruptly
+    if (this.buffer && this.buffer.length > 0) {
+      if (this.state === 'POTENTIAL_START') {
+        if (this.currentBlockType !== "text") this.startBlock("text");
+        this.writeEvent("content_block_delta", {
+          type: "content_block_delta",
+          index: this.currentBlockIndex,
+          delta: { type: "text_delta", text: this.buffer }
+        });
+      } else if (this.state === 'POTENTIAL_END') {
+        if (this.currentBlockType !== "thinking") this.startBlock("thinking");
+        this.writeEvent("content_block_delta", {
+          type: "content_block_delta",
+          index: this.currentBlockIndex,
+          delta: { type: "thinking_delta", thinking: this.buffer }
+        });
+      }
+      this.buffer = '';
+    }
+
     this.stopCurrentBlock();
     
-    const stop_reason = finishReason === "stop" || finishReason === null ? ((this as any).stopSequences && (this as any).stopSequences.length > 0 ? "stop_sequence" : "end_turn") 
+    const stop_reason = finishReason === "stop" || finishReason === null ? "end_turn" 
                       : (finishReason === "tool_calls" || finishReason === "function_call") ? "tool_use"
                       : finishReason === "length" ? "max_tokens"
                       : finishReason === "content_filter" ? "end_turn"
@@ -215,7 +241,7 @@ export class OpenRouterStreamTranslator {
     
     this.writeEvent("message_delta", {
       type: "message_delta",
-      delta: { stop_reason, stop_sequence: stop_reason === "stop_sequence" ? (this as any).stopSequences[0] : null },
+      delta: { stop_reason, stop_sequence: null },
       usage: { input_tokens: inputTokens, output_tokens: outputTokens }
     });
     
