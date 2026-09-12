@@ -181,7 +181,7 @@ export class KeyRouter {
   reportFailure(keyOrId: string, isRateLimit: boolean = false): void {
     const state = this.findKeyOrId(keyOrId);
     if (state) {
-      this.tracker.recordFailure(state.config.id, isRateLimit, false);
+      this.tracker.recordFailure(state.config.id, isRateLimit);
     }
   }
 
@@ -192,7 +192,7 @@ export class KeyRouter {
   reportSuccess(keyOrId: string, latencyMs?: number): void {
     const state = this.findKeyOrId(keyOrId);
     if (state) {
-      this.tracker.recordSuccess(state.config.id, latencyMs, false);
+      this.tracker.recordSuccess(state.config.id, latencyMs);
     }
   }
 

@@ -100,19 +100,15 @@ export class SmartRoutingStrategy implements SelectionStrategy {
       if (candidates.length === 0) return null;
     }
 
-    // 0-usage Artificial Priority
-    const zeroUsageKeys = candidates.filter(k => (k.totalRequests ?? 0) === 0);
-    if (zeroUsageKeys.length > 0) {
-      return zeroUsageKeys[Math.floor(Math.random() * zeroUsageKeys.length)] ?? null;
+    // 2. Give untested keys a chance first (cold start)
+    const untestedKeys = candidates.filter(k => (k.latencyHistory?.length ?? 0) === 0);
+    if (untestedKeys.length > 0) {
+      // Pick the least used untested key
+      untestedKeys.sort((a, b) => (a.totalRequests ?? 0) - (b.totalRequests ?? 0));
+      return untestedKeys[0] ?? null;
     }
 
-    // JITTER (20% of the time, pick a random healthy candidate)
-    if (Math.random() < 0.20 && candidates.length > 0) {
-      const idx = Math.floor(Math.random() * candidates.length);
-      return candidates[idx] ?? null;
-    }
-
-    // 2. Fast Pool Logic
+    // 3. Fast Pool: keys within +100ms of the best avg TTFT
     const keysWithLatency = candidates.filter(
       (k: KeyState) => typeof k.avgLatencyMs === 'number' && !isNaN(k.avgLatencyMs) && k.avgLatencyMs > 0
     );
@@ -120,24 +116,21 @@ export class SmartRoutingStrategy implements SelectionStrategy {
     let pool = candidates;
     if (keysWithLatency.length > 0) {
       const fastest = Math.min(...keysWithLatency.map((k: KeyState) => k.avgLatencyMs));
-      pool = candidates.filter((k: KeyState) => {
-        const hasNoLatency = typeof k.avgLatencyMs !== 'number' || isNaN(k.avgLatencyMs) || k.avgLatencyMs <= 0;
-        return hasNoLatency || k.avgLatencyMs <= fastest + 100;
-      });
+      pool = keysWithLatency.filter((k: KeyState) => k.avgLatencyMs <= fastest + 100);
     }
 
-    // Fallback if pool is empty somehow
     if (pool.length === 0) {
       pool = candidates;
     }
 
-    // 3. Least Used Logic
+    // 4. Within the fast pool, pick the key with lowest avg TTFT.
+    //    Tie-breaker: lowest utilization (rpm / limit).
     pool.sort((a: KeyState, b: KeyState) => {
-      if (a.rpm !== b.rpm) return a.rpm - b.rpm;
+      if (a.avgLatencyMs !== b.avgLatencyMs) return a.avgLatencyMs - b.avgLatencyMs;
       
-      const totalA = a.totalRequests ?? 0;
-      const totalB = b.totalRequests ?? 0;
-      return totalA - totalB;
+      const limitA = a.config.rpmLimit ?? 40;
+      const limitB = b.config.rpmLimit ?? 40;
+      return (a.rpm / limitA) - (b.rpm / limitB);
     });
 
     return pool[0] ?? null;

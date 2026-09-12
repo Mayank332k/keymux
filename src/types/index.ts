@@ -36,8 +36,10 @@ export interface KeyState {
   failures: number;
   /** Cooldown until - how long to wait before retrying */
   cooldownUntil: number;
-  /** Average latency - how fast requests are completing in milliseconds */
+  /** Average latency - calculated from last 25 requests */
   avgLatencyMs: number;
+  /** Raw TTFT history - sliding window of last 25 readings for true average calculation */
+  latencyHistory: number[];
   /** Total requests - how many requests processed so far */
   totalRequests: number;
   /** Total errors - how many errors encountered so far */
@@ -191,7 +193,7 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     baseURL: 'https://api.mistral.ai/v1',
     defaultRpmLimit: 30,
     models: [
-      'codestral-latest',
+      'codestral-2508',
       'mistral-large-latest',
       'open-mistral-nemo'
     ]
@@ -223,7 +225,7 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     baseURL: 'https://openrouter.ai/api/v1',
     defaultRpmLimit: 20,
     models: [
-      'deepseek/deepseek-chat:free',
+      'nex-agi/nex-n2.5-mini:free',
       'meta-llama/llama-3.3-70b-instruct:free',
       'qwen/qwen3-235b-a22b:free'
     ]
@@ -260,7 +262,7 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
     name: 'Groq',
     baseURL: 'https://api.groq.com/openai/v1',
     defaultRpmLimit: 30,
-    models: ['llama-3.1-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768']
+    models: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'groq/compound']
   }
 };
 

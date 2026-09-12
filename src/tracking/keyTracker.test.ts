@@ -95,12 +95,13 @@ describe('KeyTracker', () => {
       expect(state.totalRequests).toBe(1);
     });
 
-    it('should track latency with EMA', () => {
+    it('should track latency with sliding window average', () => {
       tracker.recordSuccess('key-1', 100);
       tracker.recordSuccess('key-1', 200);
 
       const state = tracker.getState('key-1')!;
-      expect(state.avgLatencyMs).toBe(110);
+      // True average: (100 + 200) / 2 = 150
+      expect(state.avgLatencyMs).toBe(150);
     });
 
     it('should recover degraded key on success', () => {
@@ -173,7 +174,7 @@ describe('KeyTracker', () => {
       const key1 = stats.find(s => s.id === 'key-1')!;
       expect(key1.rpm).toBe(2);
       expect(key1.totalRequests).toBe(2);
-      expect(key1.avgLatencyMs).toBe(110);
+      expect(key1.avgLatencyMs).toBe(150);
 
       const key2 = stats.find(s => s.id === 'key-2')!;
       expect(key2.totalErrors).toBe(1);

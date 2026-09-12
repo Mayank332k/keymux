@@ -352,14 +352,14 @@ function renderSettings() {
     const modelList = [
       { provider: 'openrouter', id: 'nex-agi/nex-n2.5-pro:free', capa: 'Vision • Free tier • Agentic QA & browser testing' },
       { provider: 'groq', id: 'qwen/qwen3.8-27b', capa: 'Vision tower • Ultra fast LPU • Native reasoning tags' },
-      { provider: 'groq', id: 'llama-3.1-70b-versatile', capa: 'Legacy 70B • Fast general purpose tool execution' },
+      { provider: 'groq', id: 'openai/gpt-oss-120b', capa: '120B • Reasoning traces • Structured output • Tool use' },
       { provider: 'groq', id: 'groq/compound', capa: 'Multi-tool agent • Integrated web search & code execution' },
       { provider: 'nvidia', id: 'nvidia/nemotron-3-super-120b-a12b', capa: '120B MoE • High volume agentic reasoning traces' },
       { provider: 'nvidia', id: 'nvidia/nemotron-3-ultra-550b-a55b', capa: '550B MoE • Massive enterprise IT & logic solver' },
-      { provider: 'nvidia', id: 'deepseek-ai/deepseek-v4-pro-0813', capa: '1.6T MoE • Top #1 coding & deep reasoning king' },
+      { provider: 'openrouter', id: 'nex-agi/nex-n2.5-mini:free', capa: 'Vision • Free tier • Ultra fast lightweight agentic tasks' },
       { provider: 'gemini', id: 'gemini-3.5-flash-lite', capa: 'Multimodal • 1M context • Low cost document parser' },
       { provider: 'mistral', id: 'devstral-latest', capa: 'Discontinued • Software engineering agentic workflow specialist' },
-      { provider: 'mistral', id: 'codestral-latest', capa: '256K context • Pure fill-in-the-middle code completion' },
+      { provider: 'mistral', id: 'codestral-2508', capa: '256K context • Pure fill-in-the-middle code completion' },
     ];
 
     for (const m of modelList) {

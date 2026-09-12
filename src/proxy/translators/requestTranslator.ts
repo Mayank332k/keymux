@@ -28,9 +28,6 @@ export function translateMessages(anthropicMessages: any[], systemPrompt: any): 
           });
         } else if (block.type === "tool_use") {
           const inputCopy = typeof block.input === 'object' && block.input !== null ? { ...block.input } : {};
-          if (!inputCopy.thought_signature) {
-            inputCopy.thought_signature = "skip_thought_signature_validator";
-          }
           calls.push({
             id: block.id,
             type: "function",
@@ -90,7 +87,6 @@ export function translateMessages(anthropicMessages: any[], systemPrompt: any): 
         }
         if (calls.length > 0) {
           messageObj.tool_calls = calls;
-          messageObj.thought_signature = "skip_thought_signature_validator";
         }
         openaiMessages.push(messageObj);
       }
@@ -104,6 +100,12 @@ export function translateTools(anthropicTools: any[]): any[] | undefined {
   return anthropicTools.map((t: any) => {
     // Deep clone the input schema so we don't mutate the original request
     const parameters = JSON.parse(JSON.stringify(t.input_schema || {}));
+    if (parameters && parameters.properties && parameters.properties.thought_signature) {
+      delete parameters.properties.thought_signature;
+      if (Array.isArray(parameters.required)) {
+        parameters.required = parameters.required.filter((r: string) => r !== 'thought_signature');
+      }
+    }
     
     return {
       type: "function",

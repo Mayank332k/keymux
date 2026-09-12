@@ -5,15 +5,20 @@
 /**
  * Check if an error is a rate limit error (429)
  */
-export function isRateLimitError(error: unknown): boolean {
+export function isRateLimitError(error: unknown, seen = new WeakSet<object>()): boolean {
   if (!error) return false;
 
   // OpenAI SDK error structure
-  if (error instanceof Error) {
-    // Check error message
-    const message = error.message.toLowerCase();
-    if (message.includes('429') || message.includes('rate limit') || message.includes('too many requests')) {
-      return true;
+  if (error instanceof Error || (typeof error === 'object' && error !== null)) {
+    if (seen.has(error as object)) return false; // Prevent infinite recursion
+    seen.add(error as object);
+    
+    if (error instanceof Error) {
+      // Check error message
+      const message = error.message.toLowerCase();
+      if (message.includes('429') || message.includes('rate limit') || message.includes('too many requests')) {
+        return true;
+      }
     }
 
     // Check for status code on error object
@@ -24,15 +29,7 @@ export function isRateLimitError(error: unknown): boolean {
 
     // Check cause chain
     if (errWithStatus.cause) {
-      return isRateLimitError(errWithStatus.cause);
-    }
-  }
-
-  // Fetch Response-like object
-  if (typeof error === 'object' && error !== null) {
-    const obj = error as { status?: number; statusCode?: number };
-    if (obj.status === 429 || obj.statusCode === 429) {
-      return true;
+      return isRateLimitError(errWithStatus.cause, seen);
     }
   }
 
@@ -42,10 +39,13 @@ export function isRateLimitError(error: unknown): boolean {
 /**
  * Check if an error is a server error (5xx)
  */
-export function isServerError(error: unknown): boolean {
+export function isServerError(error: unknown, seen = new WeakSet<object>()): boolean {
   if (!error) return false;
 
-  if (error instanceof Error) {
+  if (error instanceof Error || (typeof error === 'object' && error !== null)) {
+    if (seen.has(error as object)) return false; // Prevent infinite recursion
+    seen.add(error as object);
+    
     const errWithStatus = error as { status?: number; statusCode?: number; cause?: any };
     const status = errWithStatus.status ?? errWithStatus.statusCode;
     if (status && status >= 500 && status < 600) {
@@ -53,15 +53,7 @@ export function isServerError(error: unknown): boolean {
     }
 
     if (errWithStatus.cause) {
-      return isServerError(errWithStatus.cause);
-    }
-  }
-
-  if (typeof error === 'object' && error !== null) {
-    const obj = error as { status?: number; statusCode?: number };
-    const status = obj.status ?? obj.statusCode;
-    if (status && status >= 500 && status < 600) {
-      return true;
+      return isServerError(errWithStatus.cause, seen);
     }
   }
 

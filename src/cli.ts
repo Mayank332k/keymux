@@ -43,8 +43,8 @@ async function runBootAnimation() {
   }
   
   console.log('\n' + chalk.bold(' [ STRATEGY: TTFT FAST-POOL ]'));
-  console.log(chalk.gray(' target_model  : llama-3.1-70b-versatile'));
-  console.log(chalk.gray(' lead_provider : Groq'));
+  console.log(chalk.gray(' target_model  : qwen/qwen3.8-27b'));
+  console.log(chalk.gray(' lead_provider : Groq (LPU)'));
   console.log(chalk.gray(' variance      : ± 0.0ms\n'));
 }
 const helpText = `Usage: keymux [command] [options]

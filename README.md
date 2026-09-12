@@ -1,249 +1,75 @@
-# keymux
+# Keymux 🚀
 
-**Open-Source API Key Multiplexer & Translation Proxy for LLM Providers**
+**The Local Proxy for Claude Code — Use Claude Code for Free!**
 
-Distribute requests across multiple API keys with intelligent Time-To-First-Token (TTFT) routing, zero-downtime failover, and resilient format translation. Compatible with OpenAI SDK, LangChain, Vercel AI SDK, and any OpenAI-compatible client.
+Keymux is a lightweight local proxy that lets you use **Claude Code** (CLI, Desktop App, or IDE Extension) without paying for Anthropic credits. It acts as a middleman, intercepting Claude Code's native requests and translating them to use free or cheaper open-source models from providers like Groq, Mistral, OpenRouter, and more.
 
-> ⚠️ **Single Instance Only** — This library manages keys in-memory. For multi-instance deployments, see [Production Deployment](#production-deployment) below.
+If you have a bunch of free-tier API keys, Keymux will smartly pool them together, balancing the load so you never hit a rate limit while coding.
 
-## Community Features 💫
+## 🎯 What Does It Do?
 
-- ⚡ **Smart Routing & TTFT Tracking** — Supports multiple strategies including Smart TTFT Routing (finds fastest API key by tracking live "Time To First Token" latency), Weighted Least Utilization, and RoundRobin.
-- 🛡 **Zero-Downtime Failover** — Intercepts pre-response rate limits (429s) and 5xx errors using exponential backoff. It translates the model name to fit a fallback provider on the fly and retries automatically (note: it does not resume a stream that breaks midway).
-- 🔄 **Full Translation Layer** — Maps Anthropic Claude prompts and tool calls to OpenAI/OpenRouter format for models like Groq, Nvidia, Gemini, and Mistral. Safely intercepts binary/Base64 files preventing JSON parsing crashes.
-- 🔒 **Privacy-Safe Local Logging** — Keeps your data secure by ensuring all prompts and sensitive payloads are redacted in local logs.
-- 🖥️ **Interactive CLI Dashboard** — A hacker-friendly interface featuring a cyberpunk ASCII logo, grouped tree view for easy monitoring, and live tracking of utilization and TTFT latencies.
+- **Native Claude Code Support:** Works seamlessly with the Claude Code CLI, Claude Desktop App, and Claude IDE Extensions.
+- **Multi-Provider Magic:** Automatically translates Anthropic-formatted tool calls (like file edits and bash commands) to work with:
+  - ⚡ Groq (LPU)
+  - 🧠 Mistral
+  - 🌐 OpenRouter
+  - 🟢 Nvidia NIM
+  - 🔮 Google Gemini
+- **Multi-Key Multiplexing:** Add 5 different Groq keys, and Keymux will balance the traffic across all of them to bypass free-tier rate limits.
+- **Zero-Downtime Failover:** If an API key hits a rate limit (429) mid-request, Keymux silently translates the model name and retries on a different provider before Claude Code even notices.
+- **Cyberpunk Terminal Dashboard:** Run `keymux -d` to see a beautiful, live-updating TUI (Terminal UI) showing your active keys, network latency, and routing stats.
 
-## Installation
+## 🧠 How It Routes Traffic (The Smart Selection)
 
-```bash
-# Clone the repo
-git clone https://github.com/your-username/keymux.git
-cd keymux
-
-# Build from source
-npm run build
-# or
-npx tsc
-```
-
-## ⚡ Quick Start: Using with Claude Code
-
-![Claude Code](https://img.shields.io/badge/Claude%20Code-Zero%20Downtime-D97757?style=for-the-badge&logo=anthropic&logoColor=white)
-
-Keymux acts as a robust local proxy to route Anthropic-style requests from Claude Code to OpenRouter, Gemini, Mistral, or Nvidia NIM seamlessly!
-
-### The "Auto-Setup" Prompt 🤖
-Don't want to configure it manually? Just copy-paste this prompt into Claude Code or any LLM, and it will set everything up for you:
-
-> "Hey! I want to use Keymux as my local proxy for Claude Code. Please write a bash script to start `npx keymux daemon --port 3002` in the background. Then, update my shell profile (like `.zshrc` or `.bashrc`) to add an alias for Claude Code that automatically exports `ANTHROPIC_API_KEY="dummy"` and `ANTHROPIC_BASE_URL="http://127.0.0.1:3002/v1"` right before running the `claude` command."
-
-### Manual Setup
-1. **Start the Keymux Daemon:**
-   ```bash
-   npx keymux daemon --port 3002
-   ```
-
-2. **Configure Claude Code:**
-   Tell Claude Code to use your local Keymux proxy as its API endpoint.
-   ```bash
-   export ANTHROPIC_API_KEY="dummy-key-not-needed"
-   export ANTHROPIC_BASE_URL="http://127.0.0.1:3002/v1"
-   
-   # Start Claude Code
-   claude
-   ```
-
-3. **Enjoy Zero-Downtime Coding:**
-   Keymux will automatically translate Claude's tool calls (file edits, bash commands) to standard formats, track your API usage, and magically failover if a provider rate-limits you!
-
-## Usage as a Library
-
-### With Multi-Provider Support (Groq, Nvidia, Gemini, etc.)
-
-```typescript
-import { createRouter } from 'keymux';
-import OpenAI from 'openai';
-
-// Create router with multiple Groq API keys for LPU speed
-const router = createRouter('groq', [
-  'gsk-key-1',
-  'gsk-key-2',
-  'gsk-key-3'
-]);
-
-// Use with OpenAI SDK (drop-in replacement)
-const client = new OpenAI({
-  apiKey: async () => await router.getKey(),
-  baseURL: 'https://api.groq.com/openai/v1'
-});
-
-// Normal usage — streaming works perfectly with TTFT routing
-const stream = await client.chat.completions.create({
-  model: 'llama3-70b-8192',
-  messages: [{ role: 'user', content: 'Hello!' }],
-  stream: true
-});
-
-for await (const chunk of stream) {
-  process.stdout.write(chunk.choices[0]?.delta?.content || '');
-}
-```
-
-### With LangChain
-
-```typescript
-import { createRouter } from 'keymux';
-import { ChatOpenAI } from '@langchain/openai';
-
-const router = createRouter('mistral', [
-  'mistral-key-1', 'mistral-key-2', 'mistral-key-3'
-]);
-
-const llm = new ChatOpenAI({
-  model: 'mistral-large-latest',
-  baseURL: 'https://api.mistral.ai/v1',
-  apiKey: async () => await router.getKey(),
-  temperature: 0.7,
-  streaming: true
-});
-
-// Works with LangGraph agents, chains, etc.
-const response = await llm.invoke('Hello!');
-```
-
-### Zero-Downtime Failover in Action
-
-```typescript
-import { KeyRouter, createFailoverKeyGetter } from 'keymux';
-
-const router = new KeyRouter({
-  keys: [
-    { id: 'primary-groq', key: 'gsk-xxx', provider: 'groq' },
-    { id: 'backup-gemini', key: 'ai-zaSy...', provider: 'gemini' }
-  ],
-  trackLatency: true,
-  // Keymux intercepts 429s from groq and auto-translates request for gemini
-  enableAutoTranslation: true 
-});
-
-// Automatically retries on pre-response rate limit/server errors across providers using exponential backoff
-const apiKey = createFailoverKeyGetter(router, 3);
-```
-
-## Dashboard & CLI
-
-Launch the CLI proxy to enjoy the new Hacker Dashboard:
-```bash
-npx keymux start
-```
-You'll see:
-- A cyberpunk ASCII logo
-- Grouped Tree View of all configured providers and keys
-- Real-time TTFT (Time to First Token) latencies
-- Live utilization tracking
-
-## Advanced Usage
-
-### Custom Configuration
-
-```typescript
-import { KeyRouter } from 'keymux';
-
-const router = new KeyRouter({
-  keys: [
-    { id: 'primary-1', key: 'nvapi-xxx', rpmLimit: 40, weight: 2 },  // Higher weight = more traffic
-    { id: 'primary-2', key: 'nvapi-yyy', rpmLimit: 40, weight: 1 },
-    { id: 'backup', key: 'nvapi-zzz', rpmLimit: 20, weight: 0.5 }   // Lower weight = less traffic
-  ],
-  defaultRpmLimit: 40,
-  failureThreshold: 3,        // Open circuit after 3 failures
-  cooldownMs: 30_000,         // 30 second cooldown
-  windowMs: 60_000,           // 1-minute sliding window
-  trackLatency: true,
-  onDebug: (event) => console.log('[keymux]', event)
-});
-
-// Initialize (optional - auto-initializes on first getKey())
-router.initialize();
-```
-
-### Monitoring & Stats
-
-```typescript
-// Get real-time stats
-const stats = router.getOverallStats();
-console.log(stats);
-/*
-{
-  totalKeys: 6,
-  healthyKeys: 5,
-  overallUtilization: 0.75,
-  fastestBandTTFT: '142ms',
-  keys: [
-    { id: 'primary-1', key: 'nvap****xxx', rpm: 35, ttft: '135ms', ... },
-    ...
-  ]
-}
-*/
-```
-
-## Selection Strategies
-
-| Strategy | Description | Best For |
-|----------|-------------|----------|
-| `smart-ttft` | Fastest TTFT within +100ms tolerance band, then least utilized | **Default** — Max performance & fair distribution |
-| `weighted-least-utilization` | Lowest (RPM/limit)/weight ratio | Mixed limits, fair distribution |
-| `least-requests` | Lowest absolute RPM | Same limits, simple |
-| `round-robin` | Rotates through keys | Predictable ordering |
-| `least-latency` | Lowest avg latency without bands | Pure performance |
-| `random` | Random from available | Even distribution over time |
-
-## Error Handling
-
-Keymux intercepts formats like Base64 PDFs from tools like Claude Code to prevent JSON parsing crashes, isolating failures at the payload translation layer.
-
-## How It Works
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                              KeyRouter                                 │
-│  ┌─────────────┐    ┌────────────────────┐    ┌────────────────────┐   │
-│  │ KeyTracker  │───▶│   TTFT Strategy    │───▶│  Selected Key      │   │
-│  │ - TTFT ping │    │ - +100ms Band      │    │  - recordSuccess() │   │
-│  │ - RPM count │    │ - Least utilized   │    │  - recordFailure() │   │
-│  └─────────────┘    └────────────────────┘    └────────────────────┘   │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
-1. **Request comes in** → `router.getKey()`
-2. **Tracker filters** healthy keys (circuit closed + under RPM limit)
-3. **Strategy identifies** the fastest keys (TTFT) and builds a `+100ms` tolerance band.
-4. **Tie-breaker** picks the least utilized key in that fast band.
-5. **Failover** dynamically translates payloads across providers if a 429 or 5xx error is hit pre-response.
-
-## Production Deployment
-
-**For single-instance servers** (e.g., Next.js, single Express server, cron jobs): this library works as-is!
-
-**For multi-instance production deployments** (multiple containers/pods behind a load balancer): each instance maintains its own in-memory state, which causes load distribution to become inconsistent.
-
-To fix this, you should run keymux as a separate microservice that acts as a central key manager:
-
-```
-┌─────────────┐      ┌──────────────────┐      ┌─────────────┐
-│ Instance 1  │──────▶│                  │──────▶│   Groq     │
-├─────────────┤      │  KeyMux Service  │      └─────────────┘
-│ Instance 2  │──────▶│  (manages keys,  │──────▶│   Mistral  │
-├─────────────┤      │   tracks state,  │      └─────────────┘
-│ Instance 3  │──────▶│   routes traffic)│──────▶│   Gemini   │
-└─────────────┘      └──────────────────┘      └─────────────┘
-```
-
-This approach adds latency (extra network hop) but provides complete state isolation.
+Keymux doesn't just pick keys randomly. It uses a **Smart TTFT (Time To First Token)** algorithm:
+1. **Speed First:** It constantly pings your providers to check their latency.
+2. **Fast Pool:** It groups all keys that respond within a +100ms tolerance band.
+3. **Least Utilized:** From that fast pool, it picks the key that has been used the *least* recently (Lowest RPM).
+4. **Result:** You always get the fastest response without burning out a single API key.
 
 ---
 
-## License
+## 🛠️ Installation & Setup
 
-MIT
+### 1. Build and Link
+Clone the repository and link it globally so you can run the `keymux` command anywhere.
+```bash
+git clone https://github.com/Mayank332k/keymux.git
+cd keymux
+npm install
+npm run build
+npm link
+```
+
+### 2. Configure Your Keys
+Keymux will automatically create a configuration file at `~/.keymux/config.json`.
+You can add your free-tier API keys for whichever providers you want to use.
+
+### 3. Start the Proxy Daemon
+Start the Keymux local server in the background. It runs locally on port 3002.
+```bash
+keymux start --port 3002
+```
+*(To stop it later, just run `keymux stop`)*
+
+### 4. Connect Claude Code
+Tell Claude Code to send its requests to your local Keymux proxy instead of Anthropic's servers. 
+
+Just open your `.bashrc` or `.zshrc` and add this alias:
+```bash
+alias free-claude='export ANTHROPIC_API_KEY="dummy-key" && export ANTHROPIC_BASE_URL="http://127.0.0.1:3002/v1" && claude'
+```
+Now, just type `free-claude` in your terminal, and you're coding for free!
+
+---
+
+## 🖥️ The Dashboard
+
+Want to see what's happening under the hood? Run the interactive dashboard:
+```bash
+keymux -d
+```
+This will open the TUI where you can monitor API health, change default models, and watch the load balancer in real-time.
+
+---
+*Made for developers who want the Claude Code experience locally, without the enterprise price tag.*

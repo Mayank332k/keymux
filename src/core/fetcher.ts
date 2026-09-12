@@ -54,41 +54,44 @@ export async function fetchWithFailover(
       lastResponse = response;
 
       if (!response.ok) {
-        let isContextError = false;
+        let errorText = '';
         try {
           const clone = response.clone();
-          let text = "";
           if (clone.body) {
             const reader = clone.body.getReader();
             const { value } = await reader.read();
             if (value) {
-              text = new TextDecoder().decode(value).slice(0, 2048);
+              errorText = new TextDecoder().decode(value).slice(0, 2048);
             }
             reader.cancel().catch(() => {});
           } else {
-            text = (await clone.text()).slice(0, 2048);
+            errorText = (await clone.text()).slice(0, 2048);
           }
-          const lower = text.toLowerCase();
-          isContextError = lower.includes("context length exceeded") || lower.includes("maximum context length");
         } catch(e) {}
-        
-        if (response.status === 402 || isContextError) {
+
+        const lower = errorText.toLowerCase();
+        const isContextError = lower.includes("context length exceeded") || lower.includes("maximum context length");
+        const isModelError = lower.includes("decommissioned") || lower.includes("not a valid model") || lower.includes("model not found") || lower.includes("does not exist") || lower.includes("not supported");
+        const isAuthError = response.status === 401 || response.status === 403;
+        const isRateLimit = response.status === 429;
+
+        // Report failure to circuit breaker
+        router.reportFailure(ep.endpointId, isRateLimit);
+
+        // Exclude the ENTIRE provider if the error is provider-specific
+        // (retrying the same provider with a different key won't fix model/auth issues)
+        if (isContextError || isModelError || isAuthError || response.status === 402 || response.status === 404) {
           if (!dynamicExcludeProviders.includes(ep.provider)) {
             dynamicExcludeProviders.push(ep.provider);
           }
         }
 
-        if (response.status === 400 && !isContextError) {
-          return response;
-        }
-
-        const isRateLimit = response.status === 429;
-        router.reportFailure(ep.endpointId, isRateLimit);
-        
-        if (response.status === 429 || response.status >= 500) {
+        // Backoff on rate limits and server errors
+        if (isRateLimit || response.status >= 500) {
           await sleep(Math.min(1000 * Math.pow(2, attempts - 1), 10000));
         }
         
+        // NEVER return early — always try the next provider/key
         continue;
       }
 

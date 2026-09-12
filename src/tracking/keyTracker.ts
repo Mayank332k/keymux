@@ -52,6 +52,7 @@ export class KeyTracker {
           failures: 0,
           cooldownUntil: 0,
           avgLatencyMs: 0,
+          latencyHistory: [],
           totalRequests: 0,
           totalErrors: 0,
           requestTimestamps: []
@@ -109,25 +110,24 @@ export class KeyTracker {
 
   /**
    * Record a successful request completion
-   * Updates latency, resets failures. Does NOT increment RPM by default (done in recordAttempt).
+   * Updates latency and resets failures (RPM already incremented by recordAttempt).
    */
-  recordSuccess(keyId: string, latencyMs?: number, incrementRpm: boolean = false): void {
+  recordSuccess(keyId: string, latencyMs?: number): void {
     const state = this.keys.get(keyId);
     if (!state) return;
 
-    if (incrementRpm) {
-      state.requestTimestamps.push(Date.now());
-      state.rpm = state.requestTimestamps.length;
-      state.lastUsed = Date.now();
-      state.totalRequests++;
-    }
-    
+    state.lastUsed = Date.now();
     state.failures = 0;
 
     if (this.options.trackLatency && latencyMs != null) {
-      state.avgLatencyMs = state.avgLatencyMs === 0
-        ? latencyMs
-        : Math.round(state.avgLatencyMs * 0.9 + latencyMs * 0.1);
+      // Sliding window: keep last 25 readings, calculate true average
+      state.latencyHistory.push(latencyMs);
+      if (state.latencyHistory.length > 25) {
+        state.latencyHistory.shift();
+      }
+      state.avgLatencyMs = Math.round(
+        state.latencyHistory.reduce((sum, v) => sum + v, 0) / state.latencyHistory.length
+      );
     }
 
     // Recover if it was in degraded or open state
@@ -145,19 +145,15 @@ export class KeyTracker {
 
   /**
    * Record a failed request (rate limit, server error, etc.)
-   * Triggers circuit breaker logic
+   * Triggers circuit breaker logic (RPM already incremented by recordAttempt).
    */
-  recordFailure(keyId: string, isRateLimit: boolean = false, incrementRpm: boolean = false): void {
+  recordFailure(keyId: string, isRateLimit: boolean = false): void {
     const state = this.keys.get(keyId);
     if (!state) return;
 
     state.failures++;
     state.totalErrors++;
-    
-    if (incrementRpm) {
-      state.requestTimestamps.push(Date.now());
-      state.rpm = state.requestTimestamps.length;
-    }
+    state.lastUsed = Date.now();
 
     this.emitDebug({
       type: 'key_failed',
@@ -236,6 +232,8 @@ export class KeyTracker {
       state.cooldownUntil = 0;
       state.totalRequests = 0;
       state.totalErrors = 0;
+      state.avgLatencyMs = 0;
+      state.latencyHistory = [];
       state.requestTimestamps = [];
     }
   }

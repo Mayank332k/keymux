@@ -89,7 +89,7 @@ function createRouterInstance(config: any) {
     {
       provider: 'groq',
       keys: groqKeys,
-      models: config.groqModels || ['llama-3.1-70b-versatile'],
+      models: config.groqModels || ['qwen/qwen3.8-27b'],
     }
   ], {
     strategy: config.strategy || 'smart',
@@ -270,7 +270,7 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
             anthropic_family_tier: "sonnet"
           },
           {
-            id: "claude-3-5-sonnet-codestral-latest",
+            id: "claude-3-5-sonnet-codestral-2508",
             type: "model",
             created: 1715000000,
             display_name: "Codestral",
@@ -364,13 +364,20 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
                   if (ep.provider === 'nvidia' && !targetModel.startsWith('nvidia/') && !targetModel.startsWith('deepseek')) {
                     targetModel = 'nvidia/nemotron-3-super-120b-a12b';
                   } else if (ep.provider === 'mistral' && !targetModel.startsWith('mistral') && !targetModel.startsWith('codestral') && !targetModel.startsWith('devstral')) {
-                    targetModel = 'codestral-latest';
+                    targetModel = 'codestral-2508';
                   } else if (ep.provider === 'gemini' && !targetModel.startsWith('gemini')) {
                     targetModel = 'gemini-3.5-flash-lite';
-                  } else if (ep.provider === 'groq' && !targetModel.startsWith('llama') && !targetModel.startsWith('groq/')) {
-                    targetModel = 'llama-3.1-70b-versatile';
-                  } else if (ep.provider === 'openrouter' && targetModel.startsWith('nvidia/')) {
+                  } else if (ep.provider === 'groq' && !targetModel.startsWith('qwen/') && !targetModel.startsWith('groq/') && !targetModel.startsWith('openai/')) {
                     targetModel = 'qwen/qwen3.8-27b';
+                  } else if (ep.provider === 'openrouter') {
+                    if (targetModel.startsWith('nvidia/')) {
+                      targetModel = 'qwen/qwen3.8-27b';
+                    } else if (targetModel === 'codestral-2508') {
+                      targetModel = 'mistralai/codestral-2501';
+                    } else if (!targetModel.includes('/')) {
+                      // If the model name doesn't have a slash, it's likely a native provider model name. Let's use a safe fallback.
+                      targetModel = 'qwen/qwen3.8-27b';
+                    }
                   }
                 }
 

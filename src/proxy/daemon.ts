@@ -57,6 +57,7 @@ export async function startDaemon(port: number): Promise<void> {
 
 export async function stopDaemon(port: number): Promise<void> {
   const pidFile = getPidFile();
+  let stopped = false;
 
   if (fs.existsSync(pidFile)) {
     try {
@@ -66,23 +67,39 @@ export async function stopDaemon(port: number): Promise<void> {
            const cmd = execSync(`ps -p ${pid} -o command=`).toString();
            if (!cmd.includes('node') && !cmd.includes('keymux')) {
               console.log(`Process ${pid} is not a Keymux proxy. Aborting.`);
-              return;
+           } else {
+              process.kill(pid, 'SIGTERM');
+              console.log(`Keymux proxy (PID ${pid}) stopped gracefully.`);
+              stopped = true;
            }
         } catch (e) {
+           // Process doesn't exist
            console.log(`Failed to verify process ${pid}`);
         }
-        process.kill(pid, 'SIGTERM');
-        console.log(`Keymux proxy (PID ${pid}) stopped gracefully.`);
       }
     } catch (e: any) {
       if (e.code === 'ESRCH') {
          console.log('Proxy is not running (stale PID file).');
       } else {
-         console.log('Failed to stop proxy: ' + e.message);
+         console.log('Failed to stop proxy via PID: ' + e.message);
       }
     }
     try { fs.unlinkSync(pidFile); } catch (e) {}
-  } else {
+  }
+
+  // Fallback: forcefully kill any orphaned keymux proxy node processes
+  try {
+    const pkillCmd = `pkill -f "dist/proxy/index.js.*port: ${port}"`;
+    execSync(pkillCmd, { stdio: 'ignore' });
+    if (!stopped) {
+       console.log(`Orphaned Keymux proxy on port ${port} forcefully stopped.`);
+       stopped = true;
+    }
+  } catch (e) {
+    // pkill throws if no processes matched, which is fine
+  }
+
+  if (!stopped) {
     console.log('Keymux proxy is not running.');
   }
 }
