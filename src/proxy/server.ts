@@ -207,6 +207,9 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
       if (req.method === "GET" && req.url === "/v1/keymux/lastRoute") {
         res.writeHead(200, { "Content-Type": "application/json" });
         const lastRoute = typeof router.getLastRoute === 'function' ? router.getLastRoute() : null;
+        if (lastRoute && (global as any).lastActualTargetModel) {
+            lastRoute.model = (global as any).lastActualTargetModel;
+        }
         res.end(JSON.stringify(lastRoute || {}));
         return;
       }
@@ -341,6 +344,26 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
           let finalEp: any = null;
           let startedAt = 0;
 
+          // Detect Vision / Computer Use requirements
+          const reqString = JSON.stringify(openaiReq);
+          const needsVision = reqString.includes('"type":"image_url"');
+          const needsComputerUse = reqString.includes('"name":"computer_20241022"');
+          const isComplexRequest = needsVision || needsComputerUse;
+
+          let preferProviders = config.defaultProvider ? [config.defaultProvider] : undefined;
+          let excludeProviders = (config.strictMode && config.defaultProvider) ? router.getProviderNames().filter((p: string) => p !== config.defaultProvider) : [];
+
+          if (isComplexRequest && !config.strictMode) {
+             console.log(`[PROXY] Detected ${needsVision ? 'Vision' : 'Computer Use'} request. Activating Smart Router...`);
+             preferProviders = ['openrouter', 'gemini'];
+             
+             // Blind/incompatible providers are skipped immediately
+             const blindProviders = ['groq', 'mistral', 'nvidia'];
+             for (const p of blindProviders) {
+               if (!excludeProviders.includes(p)) excludeProviders.push(p);
+             }
+          }
+
           try {
             const fetchRes = await fetchWithFailover(
               (ep) => {
@@ -361,7 +384,11 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
 
                 // AUTO MODE: Smart Provider-Model Translation
                 if (!config.strictMode) {
-                  if (ep.provider === 'nvidia' && !targetModel.startsWith('nvidia/') && !targetModel.startsWith('deepseek')) {
+                  if (isComplexRequest && ep.provider === 'openrouter') {
+                    targetModel = 'inclusionai/ling-3.0-flash-vl:free';
+                  } else if (isComplexRequest && ep.provider === 'gemini') {
+                    targetModel = 'gemini-1.5-flash';
+                  } else if (ep.provider === 'nvidia' && !targetModel.startsWith('nvidia/') && !targetModel.startsWith('deepseek')) {
                     targetModel = 'nvidia/nemotron-3-super-120b-a12b';
                   } else if (ep.provider === 'mistral' && !targetModel.startsWith('mistral') && !targetModel.startsWith('codestral') && !targetModel.startsWith('devstral')) {
                     targetModel = 'codestral-2508';
@@ -382,6 +409,7 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
                 }
 
                 openaiReq.model = targetModel;
+                (global as any).lastActualTargetModel = targetModel;
 
                 // Only enable reasoning for providers/models that support it
                 if (ep.provider === 'openrouter' || targetModel.includes('deepseek')) {
@@ -405,8 +433,8 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
               {
                 router,
                 maxRetries: 10,
-                preferProviders: config.defaultProvider ? [config.defaultProvider] : undefined,
-                excludeProviders: (config.strictMode && config.defaultProvider) ? router.getProviderNames().filter((p: string) => p !== config.defaultProvider) : undefined
+                preferProviders: preferProviders,
+                excludeProviders: excludeProviders
               }
             );
 
@@ -547,8 +575,13 @@ export function startProxyServer(options?: ProxyServerOptions): http.Server {
             console.error("[PROXY] fetchWithFailover Error:", error);
 
             let customMessage = "[Keymux Gateway] API Error occurred.";
+            
+            const targetProvider = config.defaultProvider;
+            const hasKeysForTarget = targetProvider && config.keys && (config.keys as any)[targetProvider] && (config.keys as any)[targetProvider].length > 0;
 
-            if (error.message?.includes("timeout") || error.name === 'AbortError') {
+            if (config.strictMode && !hasKeysForTarget) {
+              customMessage = `[Keymux Gateway] 🚨 No API keys found for '${targetProvider}'. Please open another terminal, run 'keymux -d', go to Settings and add your API key.`;
+            } else if (error.message?.includes("timeout") || error.name === 'AbortError') {
               customMessage = "[Keymux Gateway] The model provider is not responding (Timeout > 60s). The server might be down or overloaded. Please try changing your Default Model or Provider via 'keymux -d'.";
             } else if (error.message?.includes("exhausted") || error.name === 'RateLimitError') {
               customMessage = "[Keymux Gateway] All available APIs for this model are currently exhausted (rate-limited or down). Please try again in a few minutes, or change your Provider/Model via 'keymux -d'.";

@@ -2,6 +2,8 @@
 
 **The Local Proxy for Claude Code — Use Claude Code for Free!**
 
+📚 **[Read the Official Documentation](https://keymux-docs.vercel.app/)**
+
 Keymux is a lightweight local proxy that lets you use **Claude Code** (CLI, Desktop App, or IDE Extension) without paying for Anthropic credits. It acts as a middleman, intercepting Claude Code's native requests and translating them to use free or cheaper open-source models from providers like Groq, Mistral, OpenRouter, and more.
 
 If you have a bunch of free-tier API keys, Keymux will smartly pool them together, balancing the load so you never hit a rate limit while coding.
@@ -9,15 +11,17 @@ If you have a bunch of free-tier API keys, Keymux will smartly pool them togethe
 ## 🎯 What Does It Do?
 
 - **Native Claude Code Support:** Works seamlessly with the Claude Code CLI, Claude Desktop App, and Claude IDE Extensions.
+- **Smart Vision Router:** Automatically detects image/computer-use requests and forces routing to Vision-enabled free models (like `ling-3.0-flash-vl`) so your coding agent never goes blind.
 - **Multi-Provider Magic:** Automatically translates Anthropic-formatted tool calls (like file edits and bash commands) to work with:
   - ⚡ Groq (LPU)
   - 🧠 Mistral
   - 🌐 OpenRouter
   - 🟢 Nvidia NIM
   - 🔮 Google Gemini
-- **Multi-Key Multiplexing:** Add 5 different Groq keys, and Keymux will balance the traffic across all of them to bypass free-tier rate limits.
+- **Multi-Key Multiplexing:** Add 5 different API keys for the same provider, and Keymux will balance the traffic across all of them to bypass free-tier rate limits.
 - **Zero-Downtime Failover:** If an API key hits a rate limit (429) mid-request, Keymux silently translates the model name and retries on a different provider before Claude Code even notices.
-- **Cyberpunk Terminal Dashboard:** Run `keymux -d` to see a beautiful, live-updating TUI (Terminal UI) showing your active keys, network latency, and routing stats.
+- **100% Accurate Tracking:** In-memory tracking precisely monitors your token usage, Requests Per Minute (RPM), and Time-To-First-Token (TTFT) latency without double-counting.
+- **Cyberpunk Terminal Dashboard:** Run `keymux -d` to see a beautiful, live-updating TUI (Terminal UI) showing your active keys, network latency, missing API key warnings, and routing stats.
 
 ## 🧠 How It Routes Traffic (The Smart Selection)
 

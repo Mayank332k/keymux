@@ -220,12 +220,16 @@ async function renderStatus() {
   } catch(e) {}
 
   let activeKey = '';
+  let lastUsedModel = 'none';
+  let lastUsedProvider = 'none';
   try {
     const lrRes = await fetch(`http://localhost:${proxyPort}/v1/keymux/lastRoute`);
     if (lrRes.ok) {
       const lr: any = await lrRes.json();
       if (lr && lr.provider) {
         activeKey = lr.key || '';
+        lastUsedModel = lr.model || 'none';
+        lastUsedProvider = lr.provider || 'none';
       }
     }
   } catch(e) {}
@@ -240,9 +244,21 @@ async function renderStatus() {
     maskedActiveKey = activeKey.length > 10 ? `${activeKey.substring(0, 4)}...${activeKey.slice(-4)}` : activeKey;
   }
 
+  let displayModel = activeModel;
+  let displayProvider = currentProvider;
+  
+  if (activeMode === 'auto') {
+    if (lastUsedModel && lastUsedModel !== 'none') {
+      displayModel = `auto (last: ${lastUsedModel})`;
+    }
+    if (lastUsedProvider && lastUsedProvider !== 'none') {
+      displayProvider = `auto (last: ${lastUsedProvider})`;
+    }
+  }
+
   printRow('Active mode', activeMode);
-  printRow('Active model', activeModel);
-  printRow('Current provider', currentProvider);
+  printRow('Active model', displayModel);
+  printRow('Current provider', displayProvider);
   printRow('Last used key', maskedActiveKey);
 
   console.log('\n  CONNECTIONS (Real-time health, RPM limits, latency)');
@@ -345,18 +361,17 @@ function renderSettings() {
 
     console.log('\n\n  ' + chalk.gray('Enter to toggle/select · S to save · X to discard'));
 
-  } else if (settingsView === 'models') {
+    } else if (settingsView === 'models') {
     console.log('\n  SELECT ACTIVE MODEL');
     console.log('  ' + '─'.repeat(110));
 
     const modelList = [
-      { provider: 'openrouter', id: 'nex-agi/nex-n2.5-pro:free', capa: 'Vision • Free tier • Agentic QA & browser testing' },
+      { provider: 'openrouter', id: 'inclusionai/ling-3.0-flash-vl:free', capa: 'Vision • Free tier • Multimodal logic & QA' },
       { provider: 'groq', id: 'qwen/qwen3.8-27b', capa: 'Vision tower • Ultra fast LPU • Native reasoning tags' },
       { provider: 'groq', id: 'openai/gpt-oss-120b', capa: '120B • Reasoning traces • Structured output • Tool use' },
       { provider: 'groq', id: 'groq/compound', capa: 'Multi-tool agent • Integrated web search & code execution' },
       { provider: 'nvidia', id: 'nvidia/nemotron-3-super-120b-a12b', capa: '120B MoE • High volume agentic reasoning traces' },
       { provider: 'nvidia', id: 'nvidia/nemotron-3-ultra-550b-a55b', capa: '550B MoE • Massive enterprise IT & logic solver' },
-      { provider: 'openrouter', id: 'nex-agi/nex-n2.5-mini:free', capa: 'Vision • Free tier • Ultra fast lightweight agentic tasks' },
       { provider: 'gemini', id: 'gemini-3.5-flash-lite', capa: 'Multimodal • 1M context • Low cost document parser' },
       { provider: 'mistral', id: 'devstral-latest', capa: 'Discontinued • Software engineering agentic workflow specialist' },
       { provider: 'mistral', id: 'codestral-2508', capa: '256K context • Pure fill-in-the-middle code completion' },
@@ -366,18 +381,20 @@ function renderSettings() {
       currentTreeItems.push({ type: 'model', provider: m.provider, id: m.id, index: index++ });
       const isSelected = (index - 1) === settingsSelectionIdx;
       const isSaved = draftConfig.defaultModel === m.id;
+      const hasKeys = draftConfig.keys && (draftConfig.keys as any)[m.provider] && (draftConfig.keys as any)[m.provider].length > 0;
 
       const modelStr = m.id.padEnd(leftColWidth);
-      const provStr = m.provider.padEnd(14);
+      const provStr = m.provider.padEnd(10);
+      const keyWarning = hasKeys ? '' : chalk.red(' ⚠️ NO KEYS ');
+      const capaStr = chalk.gray(`${m.capa}`);
 
       let line = '';
       if (isSelected) {
-        line = chalk.bgHex('#333333').white(`  ${modelStr} `) + chalk.bgHex('#333333').gray(`${provStr} ${m.capa}`);
-        console.log(chalk.bgHex('#333333')(line.padEnd(120)));
+         line = chalk.bgHex('#333333').white(`  ${modelStr} `) + chalk.bgHex('#333333').gray(`${provStr}`) + (hasKeys ? '' : chalk.bgHex('#333333').red(' ⚠️ NO KEYS ')) + chalk.bgHex('#333333').gray(`${m.capa}`);
+         console.log(chalk.bgHex('#333333')(line.padEnd(120)));
       } else {
-        const idCol = isSaved ? chalk.blue(`  ${modelStr} `) : chalk.bold.white(`  ${modelStr} `);
-        const metaCol = chalk.gray(`${provStr} ${m.capa}`);
-        console.log(`${idCol}${metaCol}`);
+         const idCol = isSaved ? chalk.blue(`  ${modelStr} `) : chalk.bold.white(`  ${modelStr} `);
+         console.log(`${idCol}${chalk.gray(provStr)}${keyWarning}${capaStr}`);
       }
     }
 
