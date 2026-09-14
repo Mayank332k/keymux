@@ -25,27 +25,7 @@ async function runBootAnimation() {
     await sleep(30);
   }
   
-  console.log(chalk.gray('\n ⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤⠤\n'));
-  console.log(chalk.bold(' [ DECORATIVE BOOT SEQUENCE - NOT LIVE DATA ] '));
-  
-  const pings = [
-    { name: 'groq', ttft: '184ms' },
-    { name: 'nvidia', ttft: '412ms' },
-    { name: 'openrouter', ttft: '590ms' },
-    { name: 'mistral', ttft: '245ms' },
-    { name: 'gemini', ttft: '810ms' },
-  ];
-  
-  for (const p of pings) {
-    process.stdout.write(` ◦ ${p.name.padEnd(12)} `);
-    await sleep(200);
-    console.log(chalk.gray(`──${chalk.cyan('●')}───────── `) + chalk.green(`[${p.ttft}] `) + chalk.bold('ONLINE'));
-  }
-  
-  console.log('\n' + chalk.bold(' [ STRATEGY: TTFT FAST-POOL ]'));
-  console.log(chalk.gray(' target_model  : qwen/qwen3.8-27b'));
-  console.log(chalk.gray(' lead_provider : Groq (LPU)'));
-  console.log(chalk.gray(' variance      : ± 0.0ms\n'));
+  console.log('\n' + chalk.green(' ✔ Keymux Gateway initialized successfully.'));
 }
 const helpText = `Usage: keymux [command] [options]
 

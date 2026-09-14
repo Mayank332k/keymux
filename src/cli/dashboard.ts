@@ -100,8 +100,8 @@ function renderTabs() {
 }
 
 async function renderStats() {
-  console.log(whiteHighlight(' Overview ') + '  Models');
-  console.log(chalk.gray.italic('  (Showing all-time cumulative history and lifetime session metrics)'));
+  console.log('\n' + whiteHighlight(' Overview '));
+  console.log(chalk.gray.italic('  (Showing all-time cumulative history and lifetime session metrics)\n'));
   const data = readUsageData();
 
   let favProvider = 'None';
@@ -149,14 +149,15 @@ async function renderStats() {
   }
 
   // Real Heatmap
+  const numWeeks = 52;
   const blocks = [gray('·'), orange('░'), orange('▒'), orange('▓'), orange('█')];
-  const grid: string[][] = Array.from({length: 7}, () => Array(52).fill(' '));
+  const grid: string[][] = Array.from({length: 7}, () => Array(numWeeks).fill(' '));
   const today = new Date();
   const todayDayOfWeek = today.getDay();
 
-  for (let col = 0; col < 52; col++) {
+  for (let col = 0; col < numWeeks; col++) {
     for (let row = 0; row < 7; row++) {
-      const weeksAgo = 51 - col;
+      const weeksAgo = (numWeeks - 1) - col;
       const daysAgo = (weeksAgo * 7) + (todayDayOfWeek - row);
       if (daysAgo < 0 || daysAgo > 364) {
         if(grid[row] && typeof col === "number") grid[row]![col] = ' ';
@@ -179,16 +180,17 @@ async function renderStats() {
     }
   }
 
+  // Month labels compressed
   console.log('    Sep Oct Nov Dec Jan Feb Mar Apr May Jun Jul Aug');
   const rowLabels = ['   ', 'Mon', '   ', 'Wed', '   ', 'Fri', '   '];
   for (let row = 0; row < 7; row++) {
     process.stdout.write(rowLabels[row] + ' ');
-    for (let col = 0; col < 52; col++) {
-      process.stdout.write((grid[row] && grid[row]![col] ? grid[row]![col] : ' ') + ' ');
+    for (let col = 0; col < numWeeks; col++) {
+      process.stdout.write(grid[row] && grid[row]![col] ? grid[row]![col] as string : ' ');
     }
     console.log();
   }
-  console.log('    Less ' + blocks.join(' ') + ' More');
+  console.log('    Less ' + blocks.join('') + ' More');
 
   console.log(orange('All time') + gray(' · Last 7 days · Last 30 days') + '');
 
@@ -203,7 +205,7 @@ async function renderStats() {
 }
 
 async function renderStatus() {
-  console.log('\n  STATUS');
+  console.log('\n\n  STATUS');
 
   let activeMode = 'auto';
   let activeModel = 'none';
@@ -345,7 +347,7 @@ function renderSettings() {
   };
 
   if (settingsView === 'main') {
-    console.log('\n  SETTINGS' + unsavedTag);
+    console.log('\n\n  SETTINGS' + unsavedTag);
     console.log('  ' + '─'.repeat(60));
 
     currentTreeItems.push({ type: 'main_mode', index: index++ });
@@ -362,7 +364,7 @@ function renderSettings() {
     console.log('\n\n  ' + chalk.gray('Enter to toggle/select · S to save · X to discard'));
 
     } else if (settingsView === 'models') {
-    console.log('\n  SELECT ACTIVE MODEL');
+    console.log('\n\n  SELECT ACTIVE MODEL');
     console.log('  ' + '─'.repeat(110));
 
     const modelList = [
@@ -401,7 +403,7 @@ function renderSettings() {
     console.log('\n\n  ' + chalk.gray('Enter to select · Esc to return'));
 
   } else if (settingsView === 'keys') {
-    console.log('\n  API SECRETS');
+    console.log('\n\n  API SECRETS');
     console.log('  ' + '─'.repeat(60));
 
     const providers = ['openrouter', 'nvidia', 'mistral', 'gemini', 'groq'];
@@ -424,10 +426,10 @@ function renderSettings() {
 
       if (expandedProviders.includes(p)) {
         for (const key of keys) {
-          currentTreeItems.push({ type: 'key', provider: p, index: index++ });
+          currentTreeItems.push({ type: 'key', provider: p, keyString: key, index: index++ });
           const keySelected = (index - 1) === settingsSelectionIdx;
           const bg = keySelected ? chalk.bgHex('#333333').gray : chalk.gray;
-          console.log(bg(`    ↳ ${maskKey(key)}`.padEnd(80)));
+          console.log(bg(`    ↳ ${maskKey(key)}${keySelected ? chalk.red(' (Press D to delete)') : ''}`.padEnd(80)));
         }
 
         currentTreeItems.push({ type: 'add', provider: p, index: index++ });
@@ -440,7 +442,7 @@ function renderSettings() {
         }
       }
     }
-    console.log('\n\n  ' + chalk.gray('Enter to add/toggle · Esc to return · S to save'));
+    console.log('\n\n  ' + chalk.gray('Enter to add/toggle · D to delete key · Esc to return · S to save'));
   }
 }
 function formatCompact(num: number): string {
@@ -450,7 +452,7 @@ function formatCompact(num: number): string {
 }
 
 async function renderUsage() {
-  console.log('\n  USAGE & ANALYTICS');
+  console.log('\n\n  USAGE & ANALYTICS');
 
   let usageData: any = { providerUsage: {} };
   try {
@@ -737,6 +739,23 @@ export async function runDashboard() {
             draftConfig.defaultProvider = '';
           }
           flashMessage = draftConfig.strictMode ? '🔒 Switched to STRICT Mode' : '⚡ Switched to AUTO Mode';
+          await render();
+        } else if ((key.toLowerCase() === 'd' || key === '\x7f' || key === '\b' || key === '\x1b[3~') && !isInputMode && settingsView === 'keys') { // Delete
+          const selected = currentTreeItems[settingsSelectionIdx];
+          if (selected && selected.type === 'key') {
+            const providerKeys = (draftConfig.keys as any)[selected.provider];
+            if (providerKeys) {
+               const idx = providerKeys.indexOf(selected.keyString);
+               if (idx > -1) {
+                 providerKeys.splice(idx, 1);
+                 flashMessage = `🗑️ Deleted key for ${selected.provider}`;
+                 // Ensure selection index doesn't overshoot after deleting an item
+                 if (settingsSelectionIdx >= currentTreeItems.length - 1) {
+                   settingsSelectionIdx = Math.max(0, currentTreeItems.length - 2);
+                 }
+               }
+            }
+          }
           await render();
         } else if (key.toLowerCase() === 's') { // Save
           config = JSON.parse(JSON.stringify(draftConfig));
